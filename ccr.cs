@@ -19,15 +19,15 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("크롬 실시간 자막 누적 저장기")]
 [assembly: AssemblyCompany("kinphw")]
 [assembly: AssemblyCopyright("kinphw")]
-[assembly: AssemblyVersion("0.0.5.0")]
-[assembly: AssemblyFileVersion("0.0.5.0")]
-[assembly: AssemblyInformationalVersion("0.0.5")]
+[assembly: AssemblyVersion("0.0.6.0")]
+[assembly: AssemblyFileVersion("0.0.6.0")]
+[assembly: AssemblyInformationalVersion("0.0.6")]
 
 static class AppInfo
 {
     public const string Name = "CCR";
     public const string LongName = "Chrome Caption Recorder";
-    public const string Version = "0.0.5";
+    public const string Version = "0.0.6";
     public const string Author = "kinphw with CLAUDE";
 
     // 정보 창·ccr.exe /? 에 쓰는 항목 (이름, 값)
@@ -41,6 +41,107 @@ static class AppInfo
         var sb = new StringBuilder();
         for (int i = 0; i < AboutRows.GetLength(0); i++) sb.Append(AboutRows[i, 0]).Append(" : ").Append(AboutRows[i, 1]).Append("\r\n");
         return sb.ToString().TrimEnd();
+    }
+}
+
+// 환경설정 창: 테마 · 줄 나눔 · 저장 폴더/파일 이름
+class SettingsForm : Form
+{
+    public string Dir, Pattern;
+    public bool AskName, BySegment, Dark;
+
+    public SettingsForm(string dir, string pattern, bool askName, bool bySegment, bool dark)
+    {
+        Func<float, int> S = Theme.S;
+        Text = AppInfo.Name + " 환경설정";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = MinimizeBox = false;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.CenterParent;
+        AutoScaleMode = AutoScaleMode.None;
+        BackColor = Theme.Card;
+        ForeColor = Theme.Text;
+        Font = new Font(Theme.FontName, 9.5f);
+        ClientSize = new Size(S(460), S(470));
+        KeyPreview = true;
+        KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
+        HandleCreated += delegate { Theme.TitleBar(this); };
+        Shown += delegate { Theme.TitleBar(this); };
+
+        var head = new Font(Theme.FontName, 10f, FontStyle.Bold);
+        var small = new Font(Theme.FontName, 8.5f);
+        int y = S(18);
+        Func<string, Label> Section = delegate (string t)
+        {
+            var l = new Label { Text = t, Font = head, ForeColor = Theme.Text, AutoSize = true, Location = new Point(S(22), y) };
+            Controls.Add(l);
+            y += S(28);
+            return l;
+        };
+        Func<string, string, Panel, RadioButton> Radio = delegate (string t, string hint, Panel group)
+        {
+            var r = new RadioButton { Text = t, AutoSize = true, Location = new Point(S(4), group.Controls.Count / 2 * S(44)), ForeColor = Theme.Text, Font = Font };
+            var h = new Label { Text = hint, Font = small, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(22), r.Top + S(21)) };
+            group.Controls.Add(r); group.Controls.Add(h);
+            return r;
+        };
+
+        // 테마
+        Section("화면 테마");
+        var gTheme = new Panel { Location = new Point(S(22), y), Size = new Size(S(416), S(28)) };
+        var rLight = new RadioButton { Text = "라이트", AutoSize = true, Location = new Point(S(4), 0), ForeColor = Theme.Text, Checked = !dark };
+        var rDark = new RadioButton { Text = "다크", AutoSize = true, Location = new Point(S(100), 0), ForeColor = Theme.Text, Checked = dark };
+        gTheme.Controls.AddRange(new Control[] { rLight, rDark });
+        Controls.Add(gTheme);
+        y += S(40);
+
+        // 줄 나눔
+        Section("줄 나눔 (국회 의사중계 자막)");
+        var gLines = new Panel { Location = new Point(S(22), y), Size = new Size(S(416), S(88)) };
+        var rTurn = Radio("발언자별 (권장)", "발언자가 바뀌면 새 문단 · 같은 사람은 1분마다 새 줄", gLines);
+        var rSeg = Radio("토막별", "자막 토막(2~5초)마다 새 줄 · 줄과 시각이 많아짐", gLines);
+        rTurn.Checked = !bySegment; rSeg.Checked = bySegment;
+        Controls.Add(gLines);
+        y += S(100);
+
+        // 저장
+        Section("저장");
+        Controls.Add(new Label { Text = "폴더", ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(24), y + S(4)) });
+        var tDir = new TextBox { Text = dir, ReadOnly = true, Location = new Point(S(92), y), Width = S(262), BackColor = Theme.Bg, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
+        var bDir = new RoundButton { Text = "변경…", Size = new Size(S(72), S(26)), Location = new Point(S(362), y - S(1)), Radius = 6, Font = small, ForeColor2 = Theme.Text };
+        bDir.Click += delegate
+        {
+            using (var fb = new FolderBrowserDialog { Description = "기록 파일을 저장할 폴더", SelectedPath = tDir.Text, ShowNewFolderButton = true })
+                if (fb.ShowDialog(this) == DialogResult.OK) tDir.Text = fb.SelectedPath;
+        };
+        Controls.AddRange(new Control[] { tDir, bDir });
+        y += S(36);
+        Controls.Add(new Label { Text = "파일 이름", ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(24), y + S(4)) });
+        var tPat = new TextBox { Text = pattern, Location = new Point(S(92), y), Width = S(342), BackColor = Theme.Bg, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
+        Controls.Add(tPat);
+        y += S(28);
+        var preview = new Label { Font = small, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(92), y) };
+        EventHandler upd = delegate { preview.Text = "{날짜} {시각} 사용 가능  →  " + MainForm.MakeName(tPat.Text, DateTime.Now); };
+        tPat.TextChanged += upd; upd(null, null);
+        Controls.Add(preview);
+        y += S(26);
+        var cAsk = new CheckBox { Text = "기록 시작할 때마다 저장 위치·이름 묻기", Checked = askName, AutoSize = true, Location = new Point(S(92), y), ForeColor = Theme.Text };
+        Controls.Add(cAsk);
+
+        // 버튼
+        var bDefault = new RoundButton { Text = "기본값", Size = new Size(S(80), S(32)), Location = new Point(S(22), S(420)), Radius = 8, ForeColor2 = Theme.Text };
+        bDefault.Click += delegate { rLight.Checked = true; rTurn.Checked = true; tPat.Text = MainForm.DefaultPattern; cAsk.Checked = false; };
+        var bCancel = new RoundButton { Text = "취소", Size = new Size(S(80), S(32)), Location = new Point(S(262), S(420)), Radius = 8, ForeColor2 = Theme.Text };
+        bCancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
+        var bOk = new RoundButton { Text = "저장", Size = new Size(S(88), S(32)), Location = new Point(S(350), S(420)), Radius = 8,
+                                    BaseColor = Theme.Dark, HoverColor = Theme.DarkHover, ForeColor2 = Color.White, Font = new Font(Theme.FontName, 9.5f, FontStyle.Bold) };
+        bOk.Click += delegate
+        {
+            Dir = tDir.Text.Trim(); Pattern = tPat.Text.Trim(); AskName = cAsk.Checked; BySegment = rSeg.Checked; Dark = rDark.Checked;
+            if (Pattern.Length == 0) Pattern = MainForm.DefaultPattern;
+            DialogResult = DialogResult.OK; Close();
+        };
+        Controls.AddRange(new Control[] { bDefault, bCancel, bOk });
     }
 }
 
@@ -61,6 +162,8 @@ class AboutForm : Form
         ClientSize = new Size(S(340), S(212));
         KeyPreview = true;
         KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.Enter) Close(); };
+        HandleCreated += delegate { Theme.TitleBar(this); };
+        Shown += delegate { Theme.TitleBar(this); };
 
         var logo = new PictureBox { Image = Theme.DrawLogo(S(44)), Size = new Size(S(44), S(44)), Location = new Point(S(24), S(22)) };
         var name = new Label { Text = AppInfo.Name, Font = new Font(Theme.FontName, 16f, FontStyle.Bold), ForeColor = Theme.Text, AutoSize = true, Location = new Point(S(78), S(18)) };
@@ -344,6 +447,7 @@ class Writer
     static readonly Encoding Utf8 = new UTF8Encoding(true);
     readonly string path;
     bool atLineStart = true;
+    public bool AtLineStart { get { return atLineStart; } }
     bool any;
     public event Action<string> Written;
 
@@ -417,6 +521,14 @@ class Writer
     }
 
     // 문단 나눔 (발언자 바뀜 등): 줄을 끝내고 빈 줄 하나
+    // 발언자 표시 줄: 빈 줄 + "[시각] ▶ 이름" + 줄바꿈
+    public void Speaker(string name)
+    {
+        Paragraph();
+        Write("▶ " + name);
+        LineBreak();
+    }
+
     // 줄만 끝냄 (이미 줄 머리면 아무것도 안 함)
     public void LineBreak()
     {
@@ -450,6 +562,48 @@ class Writer
     }
 }
 
+// ---------------------------------------------------------------- 설정 기억 (%LOCALAPPDATA%\CCR\settings.txt, 키=값 줄)
+static class Settings
+{
+    static readonly string PathName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CCR", "settings.txt");
+
+    static Dictionary<string, string> Load()
+    {
+        var d = new Dictionary<string, string>();
+        try
+        {
+            if (File.Exists(PathName))
+                foreach (var line in File.ReadAllLines(PathName, Encoding.UTF8))
+                {
+                    int i = line.IndexOf('=');
+                    if (i > 0) d[line.Substring(0, i).Trim()] = line.Substring(i + 1).Trim();
+                }
+        }
+        catch { }
+        return d;
+    }
+
+    public static string Get(string key)
+    {
+        string v;
+        return Load().TryGetValue(key, out v) ? v : null;
+    }
+
+    public static void Set(string key, string value)
+    {
+        try
+        {
+            var d = Load();
+            d[key] = value;
+            var sb = new StringBuilder();
+            foreach (var kv in d) sb.Append(kv.Key).Append('=').Append(kv.Value).Append("\r\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(PathName));
+            File.WriteAllText(PathName, sb.ToString(), new UTF8Encoding(false));
+        }
+        catch { }
+    }
+}
+
 // ---------------------------------------------------------------- 다른 프로그램 연동용 안내 파일
 // %LOCALAPPDATA%\CCR\current.json 에 지금 기록 중인 파일 경로를 남긴다. 다른 도구(Claude 세션 등)는
 // 이 파일만 보면 현재 기록 파일을 찾아 끝에서부터 이어 읽을 수 있다. 기록 파일은 추가만 되고 고쳐 쓰지 않는다.
@@ -466,7 +620,7 @@ static class Pointer
                 { "app", AppInfo.Name + " " + AppInfo.Version },
                 { "file", file }, { "recording", recording }, { "source", source ?? "" }, { "meeting", meeting ?? "" },
                 { "updated", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") },
-                { "format", "UTF-8 txt, append-only. '[HH:mm:ss] 문장' 줄, 빈 줄 = 발언자 바뀜, '■ ' 줄 = 회의명" } };
+                { "format", "UTF-8 txt, append-only. '[HH:mm:ss] 문장' 줄, 빈 줄 = 발언자 바뀜, '[HH:mm:ss] ▶ 이름' = 직접 넣은 발언자, '■ ' 줄 = 회의명" } };
             File.WriteAllText(PathName, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(d), new UTF8Encoding(false));
         }
         catch { }
@@ -659,13 +813,23 @@ return JSON.stringify(r);})()";
 class SegmentAccumulator
 {
     const string Spk1 = "rgb(35, 124, 147)", Pending = "rgb(12, 43, 128)";
-    class Unit { public string Id, Text, Spk; public bool Marked, Pending; public DateTime Changed; }
+    class Unit { public string Id, Text, Spk; public bool Marked, Pending, IsSpeaker; public DateTime Changed; }
+
+    // 화면에서 넣은 발언자 이름: 지금 대기 중인 토막들 뒤에 끼워, 순서대로 저장될 때 "▶ 이름" 줄이 됨
+    int markSeq;
+    public void MarkSpeaker(string name)
+    {
+        units.Add(new Unit { Id = "speaker|" + (++markSeq), Text = name, Spk = "", IsSpeaker = true, Changed = DateTime.Now });
+    }
 
     readonly Writer w;
     readonly List<Unit> units = new List<Unit>();          // 아직 저장 안 된 토막 (말한 순서)
     readonly Dictionary<string, Unit> map = new Dictionary<string, Unit>();
     readonly HashSet<string> done = new HashSet<string>();  // 저장한 토막 id
     string lastSpk, lastSeg;
+    DateTime lineStarted = DateTime.Now;
+    const int TurnLineSeconds = 60;
+    public volatile bool BySegment;   // 줄 나눔: true=토막별, false=발언자별(기본)
     string resumeTail = "";
     bool overlap;   // 이어 쓰기 직후: 사이트 자막 칸에 남은 줄 중 이미 파일에 있는 것은 건너뜀
 
@@ -707,6 +871,7 @@ class SegmentAccumulator
                 // 이전 토막 바로 뒤에 끼워 넣음 (오래된 줄에 토막이 덧붙는 경우)
                 int at = prev + 1 > 0 ? prev + 1 : units.Count;
                 if (at > units.Count) at = units.Count;
+                while (at < units.Count && units[at].IsSpeaker) at++;   // 발언자 표시 뒤에 온 말은 그 뒤로
                 units.Insert(at, u);
                 map[id] = u;
                 prev = at;
@@ -738,6 +903,12 @@ class SegmentAccumulator
             units.RemoveAt(0);
             map.Remove(u.Id);
             done.Add(u.Id);
+            if (u.IsSpeaker)
+            {
+                w.Speaker(u.Text);
+                lastSpk = null; lastSeg = null;   // 다음 말은 이름 줄 바로 아래에서 시작
+                continue;
+            }
             // AI 자막엔 마침표가 거의 없으므로 사이트 화면처럼 토막(stxt 번호)마다 줄을 바꾸고, 발언자가 바뀌면 빈 줄
             string seg = SegOf(u.Id);
             if (overlap)
@@ -754,9 +925,12 @@ class SegmentAccumulator
                 if (resumeLast.Length >= 4 && n.StartsWith(resumeLast) && n.Length > resumeLast.Length)
                     u.Text = "… " + n.Substring(resumeLast.Length).Trim();
             }
+            // 발언자별(기본): 발언자 바뀌면 새 문단, 같은 사람이 길게 말하면 1분마다 새 줄(새 시각)
+            // 토막별: 토막(2~5초)마다 새 줄
             if (u.Marked || (u.Spk != "" && lastSpk != null && u.Spk != lastSpk)) w.Paragraph();
-            else if (seg != lastSeg) w.LineBreak();
-            else u.Text = " " + u.Text;   // 같은 토막의 이어지는 조각
+            else if (seg != lastSeg && (BySegment || (now - lineStarted).TotalSeconds >= TurnLineSeconds)) w.LineBreak();
+            if (w.AtLineStart) lineStarted = now;
+            else u.Text = " " + u.Text;   // 같은 줄에 이어 붙임
             if (u.Spk != "") lastSpk = u.Spk;
             lastSeg = seg;
             w.Write(u.Text);
@@ -779,6 +953,7 @@ class SegmentAccumulator
         sb.Append(WebMark);
         foreach (var u in units)
         {
+            if (u.IsSpeaker) continue;
             if (sb.Length > 1) sb.Append(' ');
             if (u.Pending) sb.Append(PendOn).Append(u.Text).Append(PendOff); else sb.Append(u.Text);
         }
@@ -789,22 +964,58 @@ class SegmentAccumulator
 // ---------------------------------------------------------------- 디자인 공통
 static class Theme
 {
-    public static readonly Color Bg = Color.FromArgb(244, 245, 247);
-    public static readonly Color Card = Color.White;
-    public static readonly Color Border = Color.FromArgb(226, 229, 233);
-    public static readonly Color Text = Color.FromArgb(31, 35, 40);
-    public static readonly Color Sub = Color.FromArgb(107, 114, 128);
-    public static readonly Color Faint = Color.FromArgb(156, 163, 175);
-    public static readonly Color Red = Color.FromArgb(229, 72, 77);
-    public static readonly Color RedHover = Color.FromArgb(214, 58, 64);
-    public static readonly Color Dark = Color.FromArgb(55, 65, 81);
-    public static readonly Color DarkHover = Color.FromArgb(31, 41, 55);
-    public static readonly Color Green = Color.FromArgb(22, 163, 74);
-    public static readonly Color Orange = Color.FromArgb(217, 119, 6);
-    public static readonly Color Blue = Color.FromArgb(37, 99, 235);
-    public static readonly Color Ghost = Color.FromArgb(243, 244, 246);
-    public static readonly Color GhostHover = Color.FromArgb(229, 231, 235);
+    // 색은 Apply(dark)로 라이트/다크를 바꿈
+    public static Color Bg, Card, Border, Text, Sub, Faint, Red, RedHover, Dark, DarkHover, Green, Orange, Blue,
+                        Ghost, GhostHover, Button, ButtonHover, AccentBg, AccentHover, PendBack;
+    public static bool IsDark;
     public const string FontName = "Malgun Gothic";
+
+    static Theme() { Apply(false); }
+
+    public static void Apply(bool dark)
+    {
+        IsDark = dark;
+        Red = Color.FromArgb(229, 72, 77); RedHover = Color.FromArgb(214, 58, 64);
+        Green = Color.FromArgb(22, 163, 74); Orange = Color.FromArgb(217, 119, 6);
+        if (!dark)
+        {
+            Bg = Color.FromArgb(244, 245, 247); Card = Color.White; Border = Color.FromArgb(226, 229, 233);
+            Text = Color.FromArgb(31, 35, 40); Sub = Color.FromArgb(107, 114, 128); Faint = Color.FromArgb(156, 163, 175);
+            Dark = Color.FromArgb(55, 65, 81); DarkHover = Color.FromArgb(31, 41, 55);
+            Blue = Color.FromArgb(37, 99, 235);
+            Ghost = Color.FromArgb(243, 244, 246); GhostHover = Color.FromArgb(229, 231, 235);
+            Button = Color.White; ButtonHover = Color.FromArgb(229, 231, 235);
+            AccentBg = Color.FromArgb(232, 240, 254); AccentHover = Color.FromArgb(214, 228, 253);
+            PendBack = Color.FromArgb(219, 234, 254);
+        }
+        else
+        {
+            Bg = Color.FromArgb(17, 19, 23); Card = Color.FromArgb(28, 31, 36); Border = Color.FromArgb(48, 53, 60);
+            Text = Color.FromArgb(229, 231, 235); Sub = Color.FromArgb(156, 163, 175); Faint = Color.FromArgb(107, 114, 128);
+            Dark = Color.FromArgb(75, 85, 99); DarkHover = Color.FromArgb(95, 105, 120);
+            Blue = Color.FromArgb(96, 165, 250);
+            Ghost = Color.FromArgb(40, 44, 51); GhostHover = Color.FromArgb(55, 60, 69);
+            Button = Color.FromArgb(40, 44, 51); ButtonHover = Color.FromArgb(55, 60, 69);
+            AccentBg = Color.FromArgb(30, 50, 85); AccentHover = Color.FromArgb(40, 65, 110);
+            PendBack = Color.FromArgb(30, 55, 95);
+        }
+    }
+
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    // 제목 표시줄도 테마에 맞춤 (Windows 10 1809+; 안 되는 버전에선 무시)
+    public static void TitleBar(Form f)
+    {
+        try
+        {
+            int on = IsDark ? 1 : 0;
+            if (DwmSetWindowAttribute(f.Handle, 20, ref on, 4) != 0) DwmSetWindowAttribute(f.Handle, 19, ref on, 4);
+            // 이미 그려진 제목 표시줄을 다시 그리게 함
+            SetWindowPos(f.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020);   // NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED
+        }
+        catch { }
+    }
 
     public static float K = 1f;   // DPI 배율
     public static int S(float v) { return (int)Math.Round(v * K); }
@@ -917,13 +1128,14 @@ class StatusPill : Control
         float dot = Theme.K * 8, padX = Theme.K * 12, gap = Theme.K * 8;
         float w = Math.Min(Width - 1, padX + dot + gap + ts.Width + padX);
         var r = new RectangleF(0.5f, 0.5f, w, Height - 1.5f);
-        Color bgc = Color.FromArgb(28, DotColor);
+        Color bgc = Color.FromArgb(Theme.IsDark ? 48 : 28, DotColor);
         using (var path = Theme.Round(r, r.Height / 2))
         using (var br = new SolidBrush(bgc)) g.FillPath(br, path);
         using (var br = new SolidBrush(Dim ? Color.FromArgb(90, DotColor) : DotColor))
             g.FillEllipse(br, padX, (Height - dot) / 2f, dot, dot);
         TextRenderer.DrawText(g, Text, Font, new Rectangle((int)(padX + dot + gap), 0, ts.Width + 4, Height),
-                              ControlPaint.Dark(DotColor, 0.25f), TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding);
+                              Theme.IsDark ? ControlPaint.Light(DotColor, 0.6f) : ControlPaint.Dark(DotColor, 0.25f),
+                              TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding);
     }
 }
 
@@ -954,18 +1166,24 @@ class MainForm : Form
 {
     static readonly Regex TsRx = new Regex(@"(\[\d{2}:\d{2}:\d{2}\] )");
 
-    RoundButton btnRec, btnResume, btnHelp, btnWebcast, btnNotepad, btnFolder, btnDiag;
+    RoundButton btnRec, btnResume, btnHelp, btnSettings, btnWebcast, btnNotepad, btnFolder, btnDiag, btnSpeaker;
     StatusPill pill;
     Label lblStats, lblLiveTitle, lblLogTitle, lgPend, lgWait;
     RichTextBox liveBox;
-    static readonly Color PendBack = Color.FromArgb(219, 234, 254);
     LinkLabel lnkFile;
     CheckBox chkTop, chkScroll;
+    TextBox txtSpeaker;
     RichTextBox rtb;
-    Font fText, fTs, fSmall, fBold;
+    Font fText, fTs, fSmall, fBold, fSpeaker;
     System.Windows.Forms.Timer tick;
 
-    readonly string saveDir;
+    // 환경설정 (settings.txt에 기억)
+    string saveDir;
+    volatile bool bySegment;
+    bool askName;
+    string namePattern;
+    public const string DefaultPattern = "자막_{날짜}_{시각}";
+
     Thread worker;
     volatile bool running;
     string currentFile;
@@ -973,17 +1191,25 @@ class MainForm : Form
     int lineCount, charCount;
     bool blink;
 
+    // 테마를 바꿀 때 화면을 다시 그리기 위해 보관
+    readonly StringBuilder logHistory = new StringBuilder();
+    string prevTail = "", lastLiveShown = "";
+
+    // 화면에서 넣은 발언자 이름 → 기록 스레드가 순서에 맞춰 파일에 씀
+    readonly System.Collections.Concurrent.ConcurrentQueue<string> speakerQ = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    readonly AutoCompleteStringCollection speakerNames = new AutoCompleteStringCollection();
+
     public MainForm()
     {
         using (var g = CreateGraphics()) Theme.K = g.DpiX / 96f;
         S = Theme.S;
+        Theme.Apply(Settings.Get("theme") == "dark");
 
         Text = AppInfo.Name + " · 크롬 자막 기록기 v" + AppInfo.Version;
         AutoScaleMode = AutoScaleMode.None;
         Font = new Font(Theme.FontName, 9.5f);
-        BackColor = Theme.Bg;
-        ClientSize = new Size(S(680), S(600));
-        MinimumSize = new Size(S(520), S(420));
+        ClientSize = new Size(S(700), S(620));
+        MinimumSize = new Size(S(560), S(440));
         StartPosition = FormStartPosition.CenterScreen;
         TopMost = true;
         KeyPreview = true;
@@ -994,23 +1220,41 @@ class MainForm : Form
         fTs = new Font("Consolas", 9.5f);
         fSmall = new Font(Theme.FontName, 8.5f);
         fBold = new Font(Theme.FontName, 13f, FontStyle.Bold);
+        fSpeaker = new Font(Theme.FontName, 11f, FontStyle.Bold);
 
-        saveDir = PickSaveDir();
+        LoadPrefs();
+        string names = Settings.Get("speakers");
+        if (!string.IsNullOrEmpty(names)) speakerNames.AddRange(names.Split('|'));
+
         BuildUi();
+        Theme.TitleBar(this);   // CreateGraphics로 창이 이미 만들어졌으므로 바로 적용
+        Shown += delegate { Theme.TitleBar(this); };
 
         tick = new System.Windows.Forms.Timer { Interval = 500 };
         tick.Tick += delegate { OnTick(); };
         tick.Start();
 
-        KeyPress += delegate (object s, KeyPressEventArgs e) { if (e.KeyChar == '?' && !rtb.Focused) { e.Handled = true; ShowAbout(); } };
+        KeyPress += delegate (object s, KeyPressEventArgs e) { if (e.KeyChar == '?' && !rtb.Focused && !txtSpeaker.Focused) { e.Handled = true; ShowAbout(); } };
         KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.F1) { e.Handled = true; ShowAbout(); } };
         FormClosing += delegate { StopRec(); };
     }
 
     Func<float, int> S;
 
+    void LoadPrefs()
+    {
+        bySegment = Settings.Get("lines") == "segment";
+        askName = Settings.Get("askname") == "1";
+        namePattern = Settings.Get("pattern");
+        if (string.IsNullOrEmpty(namePattern)) namePattern = DefaultPattern;
+        string dir = Settings.Get("dir");
+        saveDir = !string.IsNullOrEmpty(dir) && Writable(dir) ? dir.TrimEnd('\\') : PickSaveDir();
+    }
+
     void BuildUi()
     {
+        BackColor = Theme.Bg;
+
         // ---- 머리글
         var header = new Panel { Dock = DockStyle.Top, Height = S(64), BackColor = Theme.Card };
         header.Paint += delegate (object s, PaintEventArgs e) { using (var p = new Pen(Theme.Border)) e.Graphics.DrawLine(p, 0, header.Height - 1, header.Width, header.Height - 1); };
@@ -1019,19 +1263,23 @@ class MainForm : Form
         var sub = new Label { Text = AppInfo.Name + " · " + AppInfo.LongName + " · v" + AppInfo.Version, Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(64), S(36)), BackColor = Color.Transparent };
         btnHelp = new RoundButton { Text = "?", Size = new Size(S(32), S(32)), Radius = 16, Font = new Font(Theme.FontName, 10.5f, FontStyle.Bold), ForeColor2 = Theme.Sub };
         btnHelp.Click += delegate { ShowAbout(); };
+        btnSettings = new RoundButton { Text = "환경설정", Height = S(32), Radius = 8, Font = new Font(Theme.FontName, 9f, FontStyle.Bold), ForeColor2 = Theme.Text };
+        btnSettings.Width = TextRenderer.MeasureText(btnSettings.Text, btnSettings.Font).Width + S(26);
+        btnSettings.Click += delegate { OpenSettings(); };
         btnWebcast = new RoundButton { Text = "국회 의사중계 열기", Height = S(32), Radius = 8, Font = new Font(Theme.FontName, 9f, FontStyle.Bold),
-                                       BaseColor = Color.FromArgb(232, 240, 254), HoverColor = Color.FromArgb(214, 228, 253), ForeColor2 = Theme.Blue };
+                                       BaseColor = Theme.AccentBg, HoverColor = Theme.AccentHover, ForeColor2 = Theme.Blue };
         btnWebcast.Width = TextRenderer.MeasureText(btnWebcast.Text, btnWebcast.Font).Width + S(28);
         btnWebcast.Click += delegate
         {
             string err;
             if (!WebcastSource.OpenBrowser(out err)) MessageBox.Show(this, err, AppInfo.Name);
         };
-        header.Controls.AddRange(new Control[] { logo, title, sub, btnWebcast, btnHelp });
+        header.Controls.AddRange(new Control[] { logo, title, sub, btnWebcast, btnSettings, btnHelp });
         header.Resize += delegate
         {
             btnHelp.Location = new Point(header.Width - S(18) - btnHelp.Width, (header.Height - btnHelp.Height) / 2);
-            btnWebcast.Location = new Point(btnHelp.Left - S(10) - btnWebcast.Width, (header.Height - btnWebcast.Height) / 2);
+            btnSettings.Location = new Point(btnHelp.Left - S(8) - btnSettings.Width, (header.Height - btnSettings.Height) / 2);
+            btnWebcast.Location = new Point(btnSettings.Left - S(8) - btnWebcast.Width, (header.Height - btnWebcast.Height) / 2);
         };
 
         // ---- 조작줄
@@ -1039,10 +1287,10 @@ class MainForm : Form
         btnRec = new RoundButton { Text = "기록 시작", Size = new Size(S(150), S(46)), Location = new Point(S(18), S(16)), Radius = 10,
                                    BaseColor = Theme.Red, HoverColor = Theme.RedHover, ForeColor2 = Color.White, Font = new Font(Theme.FontName, 11f, FontStyle.Bold) };
         btnRec.Glyph = GlyphRec;
-        btnRec.Click += delegate { if (running) StopRec(); else StartRec(); };
+        btnRec.Click += delegate { if (running) StopRec(); else StartNew(); };
         btnResume = new RoundButton { Text = "이어서 기록…", Height = S(36), Location = new Point(S(176), S(21)), Radius = 8,
-                                      Font = new Font(Theme.FontName, 9.5f, FontStyle.Bold), ForeColor2 = Theme.Dark,
-                                      BaseColor = Color.White, HoverColor = Theme.GhostHover };
+                                      Font = new Font(Theme.FontName, 9.5f, FontStyle.Bold), ForeColor2 = Theme.Text,
+                                      BaseColor = Theme.Button, HoverColor = Theme.ButtonHover };
         btnResume.Width = TextRenderer.MeasureText(btnResume.Text, btnResume.Font).Width + S(26);
         btnResume.Click += delegate { if (!running) ResumeRec(); };
         pill = new StatusPill { Location = new Point(S(184), S(25)), Size = new Size(S(330), S(28)), Font = new Font(Theme.FontName, 9.5f, FontStyle.Bold) };
@@ -1066,7 +1314,7 @@ class MainForm : Form
         liveBox = new RichTextBox { ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Card, ScrollBars = RichTextBoxScrollBars.None,
                                     Font = fText, Location = new Point(S(14), S(30)), Height = S(46), TabStop = false, DetectUrls = false, Cursor = Cursors.Default };
         // 범례: 인식 중(잠정) / 확정·저장 대기
-        lgPend = new Label { Text = " 인식 중(잠정) ", Font = fSmall, ForeColor = Theme.Blue, BackColor = PendBack, AutoSize = true, Visible = false };
+        lgPend = new Label { Text = " 인식 중(잠정) ", Font = fSmall, ForeColor = Theme.Blue, BackColor = Theme.PendBack, AutoSize = true, Visible = false };
         lgWait = new Label { Text = "확정 · 저장 대기", Font = fSmall, ForeColor = Theme.Text, BackColor = Theme.Card, AutoSize = true, Visible = false };
         liveCard.Controls.AddRange(new Control[] { lblLiveTitle, liveBox, lgPend, lgWait });
         liveCard.Resize += delegate
@@ -1077,10 +1325,23 @@ class MainForm : Form
         };
         liveWrap.Controls.Add(liveCard);
 
-        // ---- 저장된 기록 카드
+        // ---- 저장된 기록 카드 (머리줄: 제목 · 발언자 넣기 · 버튼들)
         var logWrap = new Panel { Dock = DockStyle.Fill, Padding = new Padding(S(18), 0, S(18), S(6)), BackColor = Theme.Bg };
-        var logCard = new Card { Dock = DockStyle.Fill, Padding = new Padding(S(14), S(44), S(6), S(10)) };
-        lblLogTitle = new Label { Text = "저장된 기록 (파일에 쓰인 그대로)", Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(14), S(14)), BackColor = Theme.Card };
+        var logCard = new Card { Dock = DockStyle.Fill, Padding = new Padding(S(14), S(48), S(6), S(10)) };
+        lblLogTitle = new Label { Text = "저장된 기록", Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(14), S(17)), BackColor = Theme.Card };
+        // 발언자 이름: 치고 Enter → 그 시점에 "▶ 이름" 줄을 넣음 (국회 AI 자막엔 이름이 없음)
+        txtSpeaker = new TextBox { Font = new Font(Theme.FontName, 9.5f), BorderStyle = BorderStyle.FixedSingle, BackColor = Theme.Bg, ForeColor = Theme.Text,
+                                   AutoCompleteMode = AutoCompleteMode.SuggestAppend, AutoCompleteSource = AutoCompleteSource.CustomSource, AutoCompleteCustomSource = speakerNames };
+        txtSpeaker.HandleCreated += delegate { SendMessage(txtSpeaker.Handle, EM_SETCUEBANNER, new IntPtr(1), "발언자 이름 입력 후 Enter (예: 김OO 위원)"); };
+        txtSpeaker.KeyDown += delegate (object s, KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Enter) return;
+            e.Handled = e.SuppressKeyPress = true;
+            AddSpeaker();
+        };
+        btnSpeaker = SmallButton("발언자 넣기");
+        btnSpeaker.BaseColor = Theme.AccentBg; btnSpeaker.HoverColor = Theme.AccentHover; btnSpeaker.ForeColor2 = Theme.Blue;
+        btnSpeaker.Click += delegate { AddSpeaker(); };
         btnNotepad = SmallButton("메모장으로 열기");
         btnNotepad.Click += delegate { OpenInNotepad(); };
         btnFolder = SmallButton("폴더 열기");
@@ -1089,11 +1350,16 @@ class MainForm : Form
         btnDiag.Click += delegate { SaveDiag(true); };
         rtb = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Card, ForeColor = Theme.Text,
                                 Font = fText, DetectUrls = false, HideSelection = false, ScrollBars = RichTextBoxScrollBars.Vertical };
-        logCard.Controls.AddRange(new Control[] { rtb, lblLogTitle, btnNotepad, btnFolder, btnDiag });
+        logCard.Controls.AddRange(new Control[] { rtb, lblLogTitle, txtSpeaker, btnSpeaker, btnNotepad, btnFolder, btnDiag });
         logCard.Resize += delegate
         {
             int x = logCard.Width - S(10);
-            foreach (var b in new[] { btnDiag, btnFolder, btnNotepad }) { x -= b.Width; b.Location = new Point(x, S(9)); x -= S(6); }
+            foreach (var b in new[] { btnDiag, btnFolder, btnNotepad }) { x -= b.Width; b.Location = new Point(x, S(11)); x -= S(6); }
+            int left = lblLogTitle.Right + S(12);
+            int right = btnNotepad.Left - S(14);
+            btnSpeaker.Location = new Point(right - btnSpeaker.Width, S(11));
+            txtSpeaker.Location = new Point(left, S(12));
+            txtSpeaker.Width = Math.Max(S(80), btnSpeaker.Left - S(6) - left);
         };
         logWrap.Controls.Add(logCard);
 
@@ -1103,7 +1369,7 @@ class MainForm : Form
                                   LinkColor = Theme.Sub, ActiveLinkColor = Theme.Blue, LinkBehavior = LinkBehavior.HoverUnderline, BackColor = Theme.Bg };
         lnkFile.LinkClicked += delegate { OpenFolder(); };
         chkScroll = new CheckBox { Text = "자동 스크롤", Checked = true, AutoSize = true, Font = fSmall, ForeColor = Theme.Sub, BackColor = Theme.Bg };
-        chkTop = new CheckBox { Text = "항상 위", Checked = true, AutoSize = true, Font = fSmall, ForeColor = Theme.Sub, BackColor = Theme.Bg };
+        chkTop = new CheckBox { Text = "항상 위", Checked = TopMost, AutoSize = true, Font = fSmall, ForeColor = Theme.Sub, BackColor = Theme.Bg };
         chkTop.CheckedChanged += delegate { TopMost = chkTop.Checked; };
         footer.Controls.AddRange(new Control[] { lnkFile, chkScroll, chkTop });
         footer.Resize += delegate
@@ -1121,9 +1387,82 @@ class MainForm : Form
         Controls.Add(header);
     }
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string lp);
+    const int EM_SETCUEBANNER = 0x1501;
+
+    void AddSpeaker()
+    {
+        string name = Regex.Replace(txtSpeaker.Text ?? "", @"\s+", " ").Trim();
+        if (name.Length == 0) return;
+        if (!running) { MessageBox.Show(this, "기록 중일 때 발언자를 넣을 수 있습니다.", AppInfo.Name); return; }
+        speakerQ.Enqueue(name);
+        // 자동완성 목록에 기억 (최근 것이 앞, 최대 50명)
+        var list = new List<string> { name };
+        foreach (string n in speakerNames) if (n != name && list.Count < 50) list.Add(n);
+        speakerNames.Clear(); speakerNames.AddRange(list.ToArray());
+        Settings.Set("speakers", string.Join("|", list.ToArray()));
+        txtSpeaker.Clear();
+    }
+
+    // 테마를 바꾸면 화면을 새 색으로 다시 만들고 상태를 되살림
+    void RebuildUi()
+    {
+        string pillText = pill.Text; Color pillDot = pill.DotColor;
+        string liveTitle = lblLiveTitle.Text; bool legend = lgPend.Visible;
+        string fileText = lnkFile.Text; bool scroll = chkScroll.Checked; bool resumeVisible = btnResume.Visible;
+        string speakerDraft = txtSpeaker.Text;
+        SuspendLayout();
+        var old = new List<Control>();
+        foreach (Control c in Controls) old.Add(c);
+        Controls.Clear();
+        foreach (var c in old) c.Dispose();
+        BuildUi();
+        ResumeLayout(true);
+        pill.Set(pillText, pillDot);
+        lblLiveTitle.Text = liveTitle; lgPend.Visible = lgWait.Visible = legend;
+        lnkFile.Text = fileText; chkScroll.Checked = scroll; btnResume.Visible = resumeVisible;
+        txtSpeaker.Text = speakerDraft;
+        if (running) { btnRec.Text = "기록 중지"; btnRec.Glyph = GlyphStop; btnRec.BaseColor = Theme.Dark; btnRec.HoverColor = Theme.DarkHover; }
+        RenderLog();
+        SetLive(lastLiveShown);
+        OnTick();
+        Theme.TitleBar(this);
+    }
+
+    void OpenSettings()
+    {
+        using (var f = new SettingsForm(saveDir, namePattern, askName, bySegment, Theme.IsDark))
+        {
+            f.TopMost = TopMost;
+            if (f.ShowDialog(this) != DialogResult.OK) return;
+            Settings.Set("dir", f.Dir);
+            Settings.Set("pattern", f.Pattern);
+            Settings.Set("askname", f.AskName ? "1" : "0");
+            Settings.Set("lines", f.BySegment ? "segment" : "turn");
+            Settings.Set("theme", f.Dark ? "dark" : "light");
+            bool themeChanged = f.Dark != Theme.IsDark;
+            LoadPrefs();
+            if (!running) lnkFile.Text = "저장 위치: " + saveDir;
+            if (themeChanged) { Theme.Apply(f.Dark); RebuildUi(); }
+        }
+    }
+
+    static bool Writable(string d)
+    {
+        try
+        {
+            Directory.CreateDirectory(d);
+            string probe = Path.Combine(d, ".ccr_write_test");
+            File.WriteAllText(probe, "x");
+            File.Delete(probe);
+            return true;
+        }
+        catch { return false; }
+    }
+
     RoundButton SmallButton(string text)
     {
-        var b = new RoundButton { Text = text, Font = fSmall, Height = S(28), Radius = 6, ForeColor2 = Theme.Dark };
+        var b = new RoundButton { Text = text, Font = fSmall, Height = S(28), Radius = 6, ForeColor2 = Theme.Text };
         b.Width = TextRenderer.MeasureText(text, fSmall).Width + S(22);
         return b;
     }
@@ -1145,18 +1484,7 @@ class MainForm : Form
             AppDomain.CurrentDomain.BaseDirectory,
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "CCR")
         };
-        foreach (var d in cands)
-        {
-            try
-            {
-                Directory.CreateDirectory(d);
-                string probe = Path.Combine(d, ".ccr_write_test");
-                File.WriteAllText(probe, "x");
-                File.Delete(probe);
-                return d.TrimEnd('\\');
-            }
-            catch { }
-        }
+        foreach (var d in cands) if (Writable(d)) return d.TrimEnd('\\');
         return Path.GetTempPath().TrimEnd('\\');
     }
 
@@ -1177,6 +1505,7 @@ class MainForm : Form
     {
         Ui(delegate
         {
+            lastLiveShown = t;
             liveBox.Clear();
             if (string.IsNullOrEmpty(t))
             {
@@ -1207,7 +1536,7 @@ class MainForm : Form
                 if (run.Length == 0) return;
                 liveBox.SelectionStart = liveBox.TextLength;
                 liveBox.SelectionColor = !web || pend ? Theme.Blue : Theme.Text;
-                liveBox.SelectionBackColor = web && pend ? PendBack : Theme.Card;
+                liveBox.SelectionBackColor = web && pend ? Theme.PendBack : Theme.Card;
                 liveBox.AppendText(run.ToString());
                 run.Length = 0;
             };
@@ -1248,7 +1577,22 @@ class MainForm : Form
     {
         foreach (Match m in TsRx.Matches(s)) lineCount++;
         charCount += TsRx.Replace(s, "").Replace("\r\n", "").Length;
+        logHistory.Append(s);
+        RenderChunk(s);
+    }
 
+    // 테마를 바꾼 뒤 저장된 기록 칸을 처음부터 다시 그림
+    void RenderLog()
+    {
+        rtb.Clear();
+        if (prevTail.Length > 0) { rtb.SelectionColor = Theme.Faint; rtb.SelectionFont = fText; rtb.AppendText(prevTail); }
+        if (logHistory.Length > 0) RenderChunk(logHistory.ToString());
+    }
+
+    static readonly Regex SpeakerRx = new Regex(@"^▶ ");
+
+    void RenderChunk(string s)
+    {
         int selStart = rtb.SelectionStart, selLen = rtb.SelectionLength;
         bool follow = chkScroll.Checked;
         // 자동 스크롤을 끄면 읽던 위치를 그대로 두고 아래에만 덧붙임 (파일 저장은 항상 계속됨)
@@ -1262,10 +1606,11 @@ class MainForm : Form
         {
             if (piece.Length == 0) continue;
             bool ts = TsRx.IsMatch(piece);
+            bool spk = !ts && SpeakerRx.IsMatch(piece);   // "▶ 이름" 발언자 줄은 굵은 파란 글씨
             rtb.SelectionStart = rtb.TextLength;
             rtb.SelectionLength = 0;
-            rtb.SelectionColor = ts ? Theme.Faint : Theme.Text;
-            rtb.SelectionFont = ts ? fTs : fText;
+            rtb.SelectionColor = ts ? Theme.Faint : spk ? Theme.Blue : Theme.Text;
+            rtb.SelectionFont = ts ? fTs : spk ? fSpeaker : fText;
             rtb.AppendText(piece);
         }
         if (follow) { rtb.SelectionStart = rtb.TextLength; rtb.SelectionLength = 0; rtb.ScrollToCaret(); }
@@ -1296,12 +1641,51 @@ class MainForm : Form
         }
     }
 
-    void StartRec(string resumeFile = null)
+    // 파일 이름 형식에서 새 파일 이름 만들기: {날짜}=yyyyMMdd, {시각}=HHmmss
+    public static string MakeName(string pattern, DateTime t)
+    {
+        string n = (string.IsNullOrEmpty(pattern) ? DefaultPattern : pattern)
+            .Replace("{날짜}", t.ToString("yyyyMMdd")).Replace("{시각}", t.ToString("HHmmss"));
+        foreach (char c in Path.GetInvalidFileNameChars()) n = n.Replace(c, '_');
+        n = n.Trim();
+        if (n.Length == 0) n = "자막_" + t.ToString("yyyyMMdd_HHmmss");
+        return n.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ? n : n + ".txt";
+    }
+
+    // 기록 시작(새 파일): 설정의 이름 형식으로, "이름 묻기"를 켰으면 저장 위치·이름을 고르게 함
+    void StartNew()
+    {
+        string name = MakeName(namePattern, DateTime.Now);
+        string path = Path.Combine(saveDir, name);
+        if (askName)
+        {
+            using (var dlg = new SaveFileDialog { Title = "새 기록 파일 이름", Filter = "자막 기록 (*.txt)|*.txt", InitialDirectory = saveDir, FileName = name, OverwritePrompt = false, DefaultExt = "txt" })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                path = dlg.FileName;
+            }
+            if (File.Exists(path) && new FileInfo(path).Length > 0)
+            {
+                var r = MessageBox.Show(this, "이미 있는 파일입니다. 그 파일 끝에 이어서 기록할까요?\r\n(아니요를 누르면 취소)", AppInfo.Name, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (r == DialogResult.Yes) StartRec(path);
+                return;
+            }
+        }
+        else
+        {
+            // 같은 이름이 이미 있으면 뒤에 번호를 붙임 (형식에 시각이 없을 때)
+            for (int i = 2; File.Exists(path); i++) path = Path.Combine(saveDir, Path.GetFileNameWithoutExtension(name) + "_" + i + ".txt");
+        }
+        StartRec(null, path);
+    }
+
+    void StartRec(string resumeFile = null, string newFile = null)
     {
         bool resume = resumeFile != null;
-        currentFile = resume ? resumeFile : Path.Combine(saveDir, "자막_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".txt");
+        currentFile = resume ? resumeFile : newFile ?? Path.Combine(saveDir, MakeName(namePattern, DateTime.Now));
         lnkFile.Text = (resume ? "이어서 저장 중: " : "저장 파일: ") + currentFile;
         rtb.Clear();
+        logHistory.Length = 0; prevTail = "";
         lineCount = 0; charCount = 0;
         if (resume) ShowPrevious(currentFile);
         btnResume.Visible = false;
@@ -1329,10 +1713,11 @@ class MainForm : Form
             int from = Math.Max(0, all.Length - 3000);
             int nl = all.IndexOf('\n', from);
             string tail = (from > 0 && nl >= 0) ? all.Substring(nl + 1) : all.Substring(from);
+            prevTail = (from > 0 ? "…\r\n" : "") + tail.TrimEnd() + "\r\n";
             rtb.SelectionStart = rtb.TextLength;
             rtb.SelectionColor = Theme.Faint;
             rtb.SelectionFont = fText;
-            rtb.AppendText((from > 0 ? "…\r\n" : "") + tail.TrimEnd() + "\r\n");
+            rtb.AppendText(prevTail);
         }
         catch { }
     }
@@ -1385,6 +1770,17 @@ class MainForm : Form
         });
     }
 
+    // 화면에서 넣은 발언자 이름 반영: 의사중계는 대기 중인 토막 뒤에 끼우고, 크롬 자막은 보류분을 저장한 뒤 바로 씀
+    void DrainSpeakers(bool webcast, SegmentAccumulator seg, Accumulator acc, Writer writer)
+    {
+        string name;
+        while (speakerQ.TryDequeue(out name))
+        {
+            if (webcast) seg.MarkSpeaker(name);
+            else { acc.Flush(); writer.Speaker(name); }
+        }
+    }
+
     // 자막 출처는 매번 자동 선택: CCR 전용 창에 의사중계 플레이어가 열려 있으면 국회 AI 자막, 아니면 크롬 실시간 자막
     void Loop(string file, bool resume)
     {
@@ -1411,6 +1807,7 @@ class MainForm : Form
         {
             while (running)
             {
+                DrainSpeakers(state == 2, seg, acc, writer);
                 WebcastResult wr = web.Poll();
                 if (wr != null)
                 {
@@ -1421,6 +1818,7 @@ class MainForm : Form
                         SetSourceTitle("국회 의사중계 AI 자막");
                         state = 2;
                     }
+                    seg.BySegment = bySegment;
                     seg.Feed(wr);
                     string live = seg.LiveText();
                     if (live != lastLive) { SetLive(live); lastLive = live; }
@@ -1464,6 +1862,7 @@ class MainForm : Form
         catch (Exception ex) { SetStatus("오류: " + ex.Message, Theme.Red); }
         finally
         {
+            try { DrainSpeakers(state == 2, seg, acc, writer); } catch { }
             try { acc.Flush(); } catch { }
             try { seg.Flush(); } catch { }
             web.Dispose();
