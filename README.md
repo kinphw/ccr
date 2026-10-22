@@ -2,7 +2,7 @@
 
 자막을 읽어 txt 파일에 누적 저장하는 Windows 프로그램.
 
-- 버전 0.0.4 · 작성자 kinphw
+- 버전 0.0.5 · 개발자 kinphw with CLAUDE
 - 대상: Windows 10/11 (기본 내장 .NET Framework 4.x, 설치 불필요)
 
 ## 자막 출처 (자동 선택)
@@ -28,7 +28,7 @@
 `%LOCALAPPDATA%\CCR\current.json` 에 지금 기록 중인 파일을 남긴다.
 
 ```json
-{"app":"CCR 0.0.4","file":"...\\자막_20261022_140012.txt","recording":true,"source":"webcast","meeting":"정무위원회 국정감사(금융위원회 등)","updated":"2026-10-22T14:00:15"}
+{"app":"CCR 0.0.5","file":"...\\자막_20261022_140012.txt","recording":true,"source":"webcast","meeting":"정무위원회 국정감사(금융위원회 등)","updated":"2026-10-22T14:00:15"}
 ```
 
 - `source`: `webcast`(국회 AI 자막) / `chrome-live-caption` / `""`(찾는 중)

@@ -19,28 +19,69 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("크롬 실시간 자막 누적 저장기")]
 [assembly: AssemblyCompany("kinphw")]
 [assembly: AssemblyCopyright("kinphw")]
-[assembly: AssemblyVersion("0.0.4.0")]
-[assembly: AssemblyFileVersion("0.0.4.0")]
-[assembly: AssemblyInformationalVersion("0.0.4")]
+[assembly: AssemblyVersion("0.0.5.0")]
+[assembly: AssemblyFileVersion("0.0.5.0")]
+[assembly: AssemblyInformationalVersion("0.0.5")]
 
 static class AppInfo
 {
     public const string Name = "CCR";
     public const string LongName = "Chrome Caption Recorder";
-    public const string Version = "0.0.4";
-    public const string Author = "kinphw";
+    public const string Version = "0.0.5";
+    public const string Author = "kinphw with CLAUDE";
+
+    // 정보 창·ccr.exe /? 에 쓰는 항목 (이름, 값)
+    public static readonly string[,] AboutRows = {
+        { Name, LongName },
+        { "버전", Version },
+        { "개발자", Author } };
 
     public static string AboutText()
     {
-        return Name + " (" + LongName + ")\r\n" +
-               "버전 " + Version + "\r\n" +
-               "작성자 " + Author + "\r\n\r\n" +
-               "자막을 읽어 txt 파일에 누적 저장합니다.\r\n" +
-               "  · [의사중계 열기]로 연 창에서 국회 의사중계를 보면 국회 AI 자막을 저장\r\n" +
-               "  · 그 밖에는 크롬 '실시간 자막' 말풍선을 저장\r\n\r\n" +
-               "사용법\r\n" +
-               "  ccr.exe       프로그램 실행\r\n" +
-               "  ccr.exe /?    버전 정보";
+        var sb = new StringBuilder();
+        for (int i = 0; i < AboutRows.GetLength(0); i++) sb.Append(AboutRows[i, 0]).Append(" : ").Append(AboutRows[i, 1]).Append("\r\n");
+        return sb.ToString().TrimEnd();
+    }
+}
+
+// ? 버튼·F1로 여는 정보 창
+class AboutForm : Form
+{
+    public AboutForm()
+    {
+        Func<float, int> S = Theme.S;
+        Text = AppInfo.Name + " 정보";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = MinimizeBox = false;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.CenterParent;
+        AutoScaleMode = AutoScaleMode.None;
+        BackColor = Theme.Card;
+        Font = new Font(Theme.FontName, 9.5f);
+        ClientSize = new Size(S(340), S(212));
+        KeyPreview = true;
+        KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.Enter) Close(); };
+
+        var logo = new PictureBox { Image = Theme.DrawLogo(S(44)), Size = new Size(S(44), S(44)), Location = new Point(S(24), S(22)) };
+        var name = new Label { Text = AppInfo.Name, Font = new Font(Theme.FontName, 16f, FontStyle.Bold), ForeColor = Theme.Text, AutoSize = true, Location = new Point(S(78), S(18)) };
+        var sub = new Label { Text = "크롬 자막 기록기", Font = new Font(Theme.FontName, 9f), ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(80), S(48)) };
+        var line = new Panel { BackColor = Theme.Border, Location = new Point(S(24), S(82)), Size = new Size(S(292), 1) };
+        Controls.AddRange(new Control[] { logo, name, sub, line });
+
+        var keyFont = new Font(Theme.FontName, 9.5f);
+        var valFont = new Font(Theme.FontName, 9.5f, FontStyle.Bold);
+        for (int i = 0; i < AppInfo.AboutRows.GetLength(0); i++)
+        {
+            int y = S(94 + i * 26);
+            Controls.Add(new Label { Text = AppInfo.AboutRows[i, 0], Font = keyFont, ForeColor = Theme.Sub, AutoSize = false, Size = new Size(S(52), S(22)), Location = new Point(S(24), y), TextAlign = ContentAlignment.MiddleLeft });
+            Controls.Add(new Label { Text = ":", Font = keyFont, ForeColor = Theme.Faint, AutoSize = false, Size = new Size(S(12), S(22)), Location = new Point(S(78), y), TextAlign = ContentAlignment.MiddleLeft });
+            Controls.Add(new Label { Text = AppInfo.AboutRows[i, 1], Font = valFont, ForeColor = Theme.Text, AutoSize = true, Location = new Point(S(94), y + S(2)) });
+        }
+
+        var ok = new RoundButton { Text = "확인", Size = new Size(S(84), S(32)), Location = new Point(S(232), S(168)), Radius = 8,
+                                   BaseColor = Theme.Dark, HoverColor = Theme.DarkHover, ForeColor2 = Color.White, Font = new Font(Theme.FontName, 9.5f, FontStyle.Bold) };
+        ok.Click += delegate { Close(); };
+        Controls.Add(ok);
     }
 }
 
@@ -54,10 +95,15 @@ static class Program
     {
         if (args.Length == 2 && args[0] == "--selftest") { SelfTest.Run(args[1]); return; }
         if (args.Length == 2 && args[0] == "--make-icon") { SelfTest.MakeIcon(args[1]); return; }
-        if (args.Length >= 1 && Regex.IsMatch(args[0], @"^([/-]\?|\?|[/-]h|--help|[/-]v|--version)$", RegexOptions.IgnoreCase))
+        if (args.Length >= 1 && Regex.IsMatch(args[0], @"^([/-]\?|\?|[/-]h|--help|[/-]v|--version|--about)$", RegexOptions.IgnoreCase))
         {
-            if (AttachConsole(-1)) { Console.WriteLine(); Console.WriteLine(AppInfo.AboutText()); }
-            else MessageBox.Show(AppInfo.AboutText(), AppInfo.Name + " 정보", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (AttachConsole(-1) && args[0] != "--about") { Console.WriteLine(); Console.WriteLine(AppInfo.AboutText()); }
+            else
+            {
+                Application.EnableVisualStyles();
+                using (var g = Graphics.FromHwnd(IntPtr.Zero)) Theme.K = g.DpiX / 96f;
+                Application.Run(new AboutForm { StartPosition = FormStartPosition.CenterScreen });
+            }
             return;
         }
         Application.EnableVisualStyles();
@@ -1116,7 +1162,7 @@ class MainForm : Form
 
     void ShowAbout()
     {
-        MessageBox.Show(this, AppInfo.AboutText(), AppInfo.Name + " 정보", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        using (var f = new AboutForm()) { f.TopMost = TopMost; f.ShowDialog(this); }
     }
 
     void Ui(MethodInvoker a)
