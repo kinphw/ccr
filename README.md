@@ -2,14 +2,14 @@
 
 자막을 읽어 txt 파일에 누적 저장하는 Windows 프로그램.
 
-- 버전 0.0.5 · 개발자 kinphw with CLAUDE
+- 버전 0.0.6 · 개발자 kinphw with CLAUDE
 - 대상: Windows 10/11 (기본 내장 .NET Framework 4.x, 설치 불필요)
 
 ## 자막 출처 (자동 선택)
 
 1. **국회 의사중계 AI 자막**: `[국회 의사중계 열기]`로 연 CCR 전용 크롬 창에서 생중계 플레이어가 열려 있으면,
    크롬 디버깅 포트(127.0.0.1:9223)로 페이지의 자막 칸(`#viewSubtit .incont`)을 직접 읽는다.
-   토막(`segarr_*`) 단위, 글자색으로 발언자 1/2·인식 중 구분 → 확정된 토막만 순서대로 저장. 토막마다 줄 바꿈(AI 자막엔 마침표가 없음), 발언자 바뀌면 빈 줄.
+   토막(`segarr_*`) 단위, 글자색으로 발언자 1/2·인식 중 구분 → 확정된 토막만 순서대로 저장. 줄 나눔은 환경설정에서 고름: 발언자별(기본: 발언자 바뀌면 빈 줄로 새 문단, 같은 사람은 1분마다 새 줄) / 토막별(토막마다 새 줄). AI 자막엔 마침표도 발언자 이름도 없다.
    전용 창은 별도 프로필(`%LOCALAPPDATA%\CCR\browser-profile`)을 쓴다.
 2. **크롬 실시간 자막**: 그 밖의 경우 크롬 "실시간 자막" 말풍선을 UI Automation으로 읽는다.
    말풍선은 밀려 올라가므로 저장한 끝부분을 찾아 이어 붙이고, 끝 몇 글자는 잠잠해질 때까지 보류.
@@ -18,8 +18,10 @@
 
 1. `ccr.exe` 실행 → `[기록 시작]`(새 파일) 또는 `[이어서 기록…]`(기존 파일 골라 그 끝에 계속). 기록 txt를 `ccr.exe`에 끌어다 놓아도 이어서 기록
 2. 의사중계: `[국회 의사중계 열기]` → 그 창에서 생중계 선택(영상 재생) / 그 밖: 크롬 설정 → 접근성 → 실시간 자막
-3. exe 폴더(쓰기 불가면 `문서\CCR`)에 `자막_yyyyMMdd_HHmmss.txt`로 저장
-4. 연결 안 되면 `[진단 저장]`
+3. 기본은 exe 폴더(쓰기 불가면 `문서\CCR`)에 `자막_yyyyMMdd_HHmmss.txt`로 저장. `[환경설정]`에서 저장 폴더, 파일 이름 형식(`{날짜}` `{시각}`), "기록 시작할 때마다 저장 위치·이름 묻기"를 바꿀 수 있다
+4. 발언자: 이름을 치고 Enter(또는 `[발언자 넣기]`) → 그 시점에 `[시각] ▶ 이름` 줄이 들어간다. 쓴 이름은 자동완성
+5. `[환경설정]`: 화면 테마(라이트/다크), 줄 나눔, 저장 폴더·파일 이름. 설정은 `%LOCALAPPDATA%\CCR\settings.txt`에 기억
+6. 연결 안 되면 `[진단 저장]`
 
 `ccr.exe /?` : 버전 정보
 
@@ -28,11 +30,11 @@
 `%LOCALAPPDATA%\CCR\current.json` 에 지금 기록 중인 파일을 남긴다.
 
 ```json
-{"app":"CCR 0.0.5","file":"...\\자막_20261022_140012.txt","recording":true,"source":"webcast","meeting":"정무위원회 국정감사(금융위원회 등)","updated":"2026-10-22T14:00:15"}
+{"app":"CCR 0.0.6","file":"...\\자막_20261022_140012.txt","recording":true,"source":"webcast","meeting":"정무위원회 국정감사(금융위원회 등)","updated":"2026-10-22T14:00:15"}
 ```
 
 - `source`: `webcast`(국회 AI 자막) / `chrome-live-caption` / `""`(찾는 중)
-- 기록 파일은 UTF-8, 추가만 됨(고쳐 쓰지 않음). `[HH:mm:ss] 문장` 줄, 빈 줄 = 발언자 바뀜, `■ ` 줄 = 회의명
+- 기록 파일은 UTF-8, 추가만 됨(고쳐 쓰지 않음). `[HH:mm:ss] 문장` 줄, 빈 줄 = 발언자 바뀜, `[HH:mm:ss] ▶ 이름` 줄 = 직접 넣은 발언자, `■ ` 줄 = 회의명
 - 따라서 읽는 쪽은 마지막으로 읽은 바이트 위치부터 이어 읽으면 된다.
 - 이어서 기록하면 `── 이어서 기록 …` 구분선 뒤로 이어지고, 사이트 자막 칸에 남아 있던(이미 파일에 있는) 줄은 건너뛴다.
 
@@ -48,7 +50,7 @@ build.bat
 
 ## 구조
 
-- `ccr.cs` : 전체 소스 (CaptionReader·Accumulator: 크롬 자막 / WebcastSource·SegmentAccumulator: 의사중계 / Writer: 파일 / Pointer: 연동 / MainForm: 화면)
+- `ccr.cs` : 전체 소스 (CaptionReader·Accumulator: 크롬 자막 / WebcastSource·SegmentAccumulator: 의사중계 / Writer: 파일 / Pointer: 연동 / Settings: 설정 기억 / MainForm·SettingsForm·AboutForm: 화면)
 - `app.manifest` : DPI 인식 설정
 - `legacy\` : 초판(PowerShell 배치, 첫 C# 버전)
 
