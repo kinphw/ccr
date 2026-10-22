@@ -1,4 +1,4 @@
-// CCR (Chrome Caption Recorder) - 크롬/엣지 "실시간 자막" 말풍선 텍스트를 UI Automation으로 읽어 txt에 누적 저장
+﻿// CCR (Chrome Caption Recorder) - 크롬/엣지 "실시간 자막" 말풍선 텍스트를 UI Automation으로 읽어 txt에 누적 저장
 // 빌드: build.bat (Windows 기본 .NET Framework 4.x csc 사용, 별도 설치 불필요)
 using System;
 using System.Collections.Generic;
@@ -19,15 +19,15 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("크롬 실시간 자막 누적 저장기")]
 [assembly: AssemblyCompany("kinphw")]
 [assembly: AssemblyCopyright("kinphw")]
-[assembly: AssemblyVersion("0.0.2.0")]
-[assembly: AssemblyFileVersion("0.0.2.0")]
-[assembly: AssemblyInformationalVersion("0.0.2")]
+[assembly: AssemblyVersion("0.0.3.0")]
+[assembly: AssemblyFileVersion("0.0.3.0")]
+[assembly: AssemblyInformationalVersion("0.0.3")]
 
 static class AppInfo
 {
     public const string Name = "CCR";
     public const string LongName = "Chrome Caption Recorder";
-    public const string Version = "0.0.2";
+    public const string Version = "0.0.3";
     public const string Author = "kinphw";
 
     public static string AboutText()
@@ -317,6 +317,14 @@ class Writer
     }
 
     // 문단 나눔 (발언자 바뀜 등): 줄을 끝내고 빈 줄 하나
+    // 줄만 끝냄 (이미 줄 머리면 아무것도 안 함)
+    public void LineBreak()
+    {
+        if (atLineStart) return;
+        Emit("\r\n");
+        atLineStart = true;
+    }
+
     public void Paragraph()
     {
         if (!any) return;
@@ -557,7 +565,7 @@ class SegmentAccumulator
     readonly List<Unit> units = new List<Unit>();          // 아직 저장 안 된 토막 (말한 순서)
     readonly Dictionary<string, Unit> map = new Dictionary<string, Unit>();
     readonly HashSet<string> done = new HashSet<string>();  // 저장한 토막 id
-    string lastSpk;
+    string lastSpk, lastSeg;
     string meeting;
     public string Meeting { get { return meeting; } }
 
@@ -612,22 +620,41 @@ class SegmentAccumulator
         {
             var u = units[0];
             double idle = (now - u.Changed).TotalSeconds;
-            bool ready = all || (!u.Pending && (units.Count > 1 || idle > 5)) || idle > 20;
+            bool ready = all || (!u.Pending && (units.Count > 1 || idle > 2)) || idle > 20;
             if (!ready) break;
             units.RemoveAt(0);
             map.Remove(u.Id);
             done.Add(u.Id);
+            // AI 자막엔 마침표가 거의 없으므로 사이트 화면처럼 토막(stxt 번호)마다 줄을 바꾸고, 발언자가 바뀌면 빈 줄
+            string seg = SegOf(u.Id);
             if (u.Marked || (u.Spk != "" && lastSpk != null && u.Spk != lastSpk)) w.Paragraph();
+            else if (seg != lastSeg) w.LineBreak();
+            else u.Text = " " + u.Text;   // 같은 토막의 이어지는 조각
             if (u.Spk != "") lastSpk = u.Spk;
-            w.Write(u.Text + " ");
+            lastSeg = seg;
+            w.Write(u.Text);
         }
     }
 
-    // 화면의 "실시간 인식"용: 아직 저장 안 된 토막들
+    static readonly Regex SegRx = new Regex(@"\|(?:segarr_(\d+)_|stxt(\d+))");
+    static string SegOf(string id)
+    {
+        var m = SegRx.Match(id);
+        return m.Success ? id.Substring(0, id.IndexOf('|')) + "#" + m.Groups[1].Value + m.Groups[2].Value : id;
+    }
+
+    // 화면의 "실시간 인식"용: 아직 저장 안 된 토막들. 인식 중(잠정) 토막은 PendOn…PendOff로 감쌈
+    public const char WebMark = '\u0001', PendOn = '\u0002', PendOff = '\u0003';
     public string LiveText()
     {
+        if (units.Count == 0) return "";
         var sb = new StringBuilder();
-        foreach (var u in units) { if (sb.Length > 0) sb.Append(' '); sb.Append(u.Text); }
+        sb.Append(WebMark);
+        foreach (var u in units)
+        {
+            if (sb.Length > 1) sb.Append(' ');
+            if (u.Pending) sb.Append(PendOn).Append(u.Text).Append(PendOff); else sb.Append(u.Text);
+        }
         return sb.ToString();
     }
 }
@@ -802,7 +829,9 @@ class MainForm : Form
 
     RoundButton btnRec, btnHelp, btnWebcast, btnNotepad, btnFolder, btnDiag;
     StatusPill pill;
-    Label lblStats, lblLive, lblLiveTitle, lblLogTitle;
+    Label lblStats, lblLiveTitle, lblLogTitle, lgPend, lgWait;
+    RichTextBox liveBox;
+    static readonly Color PendBack = Color.FromArgb(219, 234, 254);
     LinkLabel lnkFile;
     CheckBox chkTop, chkScroll;
     RichTextBox rtb;
@@ -898,10 +927,18 @@ class MainForm : Form
         var liveWrap = new Panel { Dock = DockStyle.Top, Height = S(92), Padding = new Padding(S(18), 0, S(18), S(10)), BackColor = Theme.Bg };
         var liveCard = new Card { Dock = DockStyle.Fill };
         lblLiveTitle = new Label { Text = "실시간 인식 (크롬 자막 말풍선)", Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(14), S(9)), BackColor = Theme.Card };
-        lblLive = new Label { Text = "기록을 시작하면 지금 크롬 자막에 보이는 문장이 여기 표시됩니다.", Font = fText, ForeColor = Theme.Faint, AutoSize = false, AutoEllipsis = true,
-                              Location = new Point(S(14), S(30)), Height = S(44), BackColor = Theme.Card, TextAlign = ContentAlignment.MiddleLeft };
-        liveCard.Controls.AddRange(new Control[] { lblLiveTitle, lblLive });
-        liveCard.Resize += delegate { lblLive.Width = liveCard.Width - S(28); };
+        liveBox = new RichTextBox { ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Card, ScrollBars = RichTextBoxScrollBars.None,
+                                    Font = fText, Location = new Point(S(14), S(30)), Height = S(46), TabStop = false, DetectUrls = false, Cursor = Cursors.Default };
+        // 범례: 인식 중(잠정) / 확정·저장 대기
+        lgPend = new Label { Text = " 인식 중(잠정) ", Font = fSmall, ForeColor = Theme.Blue, BackColor = PendBack, AutoSize = true };
+        lgWait = new Label { Text = "확정 · 저장 대기", Font = fSmall, ForeColor = Theme.Text, BackColor = Theme.Card, AutoSize = true };
+        liveCard.Controls.AddRange(new Control[] { lblLiveTitle, liveBox, lgPend, lgWait });
+        liveCard.Resize += delegate
+        {
+            liveBox.Width = liveCard.Width - S(28);
+            lgWait.Location = new Point(liveCard.Width - S(14) - lgWait.Width, S(9));
+            lgPend.Location = new Point(lgWait.Left - S(10) - lgPend.Width, S(9));
+        };
         liveWrap.Controls.Add(liveCard);
 
         // ---- 저장된 기록 카드
@@ -1004,20 +1041,60 @@ class MainForm : Form
     {
         Ui(delegate
         {
+            liveBox.Clear();
             if (string.IsNullOrEmpty(t))
             {
-                lblLive.ForeColor = Theme.Faint;
-                lblLive.Text = running ? "말소리가 나오면 여기 표시됩니다." : "기록을 시작하면 지금 인식 중인 문장이 여기 표시됩니다.";
+                liveBox.SelectionColor = Theme.Faint;
+                liveBox.AppendText(running ? "말소리가 나오면 여기 표시됩니다." : "기록을 시작하면 지금 인식 중인 문장이 여기 표시됩니다.");
                 return;
             }
-            // 카드 폭에 맞게 끝부분(최신)만 보이도록
-            string show = t;
-            int max = Math.Max(20, lblLive.Width * 2 / Math.Max(1, (int)(fText.Size * Theme.K)));
-            if (show.Length > max) show = "…" + show.Substring(show.Length - max);
-            lblLive.ForeColor = Theme.Blue;
-            lblLive.Text = show;
+            // 의사중계: 인식 중(잠정)=하늘색 배경, 확정·저장 대기=진한 글씨 / 크롬 자막: 구분 정보가 없어 전체 파란 글씨
+            bool web = t[0] == SegmentAccumulator.WebMark;
+            if (web) t = t.Substring(1);
+            // 카드 폭에 맞게 끝부분(최신)만: 표시 글자 수를 세어 앞을 자름
+            int max = Math.Max(20, liveBox.Width * 2 / Math.Max(1, (int)(fText.Size * Theme.K)));
+            int cut = 0, count = 0;
+            for (int i = t.Length - 1; i >= 0; i--)
+            {
+                if (t[i] == SegmentAccumulator.PendOn || t[i] == SegmentAccumulator.PendOff) continue;
+                if (++count > max) { cut = i + 1; break; }
+            }
+            bool pend = false;
+            for (int i = 0; i < cut; i++)
+            {
+                if (t[i] == SegmentAccumulator.PendOn) pend = true;
+                else if (t[i] == SegmentAccumulator.PendOff) pend = false;
+            }
+            var run = new StringBuilder(cut > 0 ? "…" : "");
+            MethodInvoker flush = delegate
+            {
+                if (run.Length == 0) return;
+                liveBox.SelectionStart = liveBox.TextLength;
+                liveBox.SelectionColor = !web || pend ? Theme.Blue : Theme.Text;
+                liveBox.SelectionBackColor = web && pend ? PendBack : Theme.Card;
+                liveBox.AppendText(run.ToString());
+                run.Length = 0;
+            };
+            for (int i = cut; i < t.Length; i++)
+            {
+                char ch = t[i];
+                if (ch == SegmentAccumulator.PendOn || ch == SegmentAccumulator.PendOff)
+                {
+                    flush();
+                    pend = ch == SegmentAccumulator.PendOn;
+                    continue;
+                }
+                run.Append(ch);
+            }
+            flush();
+            liveBox.SelectionStart = liveBox.TextLength;
+            liveBox.ScrollToCaret();
         });
     }
+
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, ref Point lp);
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr lp);
+    const int WM_SETREDRAW = 0x0B, EM_GETSCROLLPOS = 0x400 + 221, EM_SETSCROLLPOS = 0x400 + 222;
 
     void OnTick()
     {
@@ -1038,6 +1115,13 @@ class MainForm : Form
 
         int selStart = rtb.SelectionStart, selLen = rtb.SelectionLength;
         bool follow = chkScroll.Checked;
+        // 자동 스크롤을 끄면 읽던 위치를 그대로 두고 아래에만 덧붙임 (파일 저장은 항상 계속됨)
+        var pos = new Point();
+        if (!follow)
+        {
+            SendMessage(rtb.Handle, EM_GETSCROLLPOS, IntPtr.Zero, ref pos);
+            SendMessage(rtb.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+        }
         foreach (string piece in TsRx.Split(s))
         {
             if (piece.Length == 0) continue;
@@ -1049,7 +1133,13 @@ class MainForm : Form
             rtb.AppendText(piece);
         }
         if (follow) { rtb.SelectionStart = rtb.TextLength; rtb.SelectionLength = 0; rtb.ScrollToCaret(); }
-        else { rtb.SelectionStart = selStart; rtb.SelectionLength = selLen; }
+        else
+        {
+            rtb.SelectionStart = selStart; rtb.SelectionLength = selLen;
+            SendMessage(rtb.Handle, EM_SETSCROLLPOS, IntPtr.Zero, ref pos);
+            SendMessage(rtb.Handle, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
+            rtb.Invalidate();
+        }
     }
 
     void StartRec()
@@ -1111,7 +1201,14 @@ class MainForm : Form
         catch (Exception ex) { if (open) MessageBox.Show(this, "진단 저장 실패: " + ex.Message, AppInfo.Name); }
     }
 
-    void SetSourceTitle(string t) { Ui(delegate { lblLiveTitle.Text = "실시간 인식 (" + t + ")"; }); }
+    void SetSourceTitle(string t)
+    {
+        Ui(delegate
+        {
+            lblLiveTitle.Text = "실시간 인식 (" + t + ")";
+            lgPend.Visible = lgWait.Visible = t.Contains("의사중계");   // 잠정/확정 구분은 의사중계 자막에만 있음
+        });
+    }
 
     // 자막 출처는 매번 자동 선택: CCR 전용 창에 의사중계 플레이어가 열려 있으면 국회 AI 자막, 아니면 크롬 실시간 자막
     void Loop(string file)
