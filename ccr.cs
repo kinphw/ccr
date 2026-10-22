@@ -19,15 +19,15 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("크롬 실시간 자막 누적 저장기")]
 [assembly: AssemblyCompany("kinphw")]
 [assembly: AssemblyCopyright("kinphw")]
-[assembly: AssemblyVersion("0.0.6.0")]
-[assembly: AssemblyFileVersion("0.0.6.0")]
-[assembly: AssemblyInformationalVersion("0.0.6")]
+[assembly: AssemblyVersion("0.0.7.0")]
+[assembly: AssemblyFileVersion("0.0.7.0")]
+[assembly: AssemblyInformationalVersion("0.0.7")]
 
 static class AppInfo
 {
     public const string Name = "CCR";
     public const string LongName = "Chrome Caption Recorder";
-    public const string Version = "0.0.6";
+    public const string Version = "0.0.7";
     public const string Author = "kinphw with CLAUDE";
 
     // 정보 창·ccr.exe /? 에 쓰는 항목 (이름, 값)
@@ -521,14 +521,6 @@ class Writer
     }
 
     // 문단 나눔 (발언자 바뀜 등): 줄을 끝내고 빈 줄 하나
-    // 발언자 표시 줄: 빈 줄 + "[시각] ▶ 이름" + 줄바꿈
-    public void Speaker(string name)
-    {
-        Paragraph();
-        Write("▶ " + name);
-        LineBreak();
-    }
-
     // 줄만 끝냄 (이미 줄 머리면 아무것도 안 함)
     public void LineBreak()
     {
@@ -620,7 +612,7 @@ static class Pointer
                 { "app", AppInfo.Name + " " + AppInfo.Version },
                 { "file", file }, { "recording", recording }, { "source", source ?? "" }, { "meeting", meeting ?? "" },
                 { "updated", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") },
-                { "format", "UTF-8 txt, append-only. '[HH:mm:ss] 문장' 줄, 빈 줄 = 발언자 바뀜, '[HH:mm:ss] ▶ 이름' = 직접 넣은 발언자, '■ ' 줄 = 회의명" } };
+                { "format", "UTF-8 txt, append-only. '[HH:mm:ss] 문장' 줄, 빈 줄 = 발언자 바뀜, '■ ' 줄 = 회의명" } };
             File.WriteAllText(PathName, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(d), new UTF8Encoding(false));
         }
         catch { }
@@ -813,14 +805,7 @@ return JSON.stringify(r);})()";
 class SegmentAccumulator
 {
     const string Spk1 = "rgb(35, 124, 147)", Pending = "rgb(12, 43, 128)";
-    class Unit { public string Id, Text, Spk; public bool Marked, Pending, IsSpeaker; public DateTime Changed; }
-
-    // 화면에서 넣은 발언자 이름: 지금 대기 중인 토막들 뒤에 끼워, 순서대로 저장될 때 "▶ 이름" 줄이 됨
-    int markSeq;
-    public void MarkSpeaker(string name)
-    {
-        units.Add(new Unit { Id = "speaker|" + (++markSeq), Text = name, Spk = "", IsSpeaker = true, Changed = DateTime.Now });
-    }
+    class Unit { public string Id, Text, Spk; public bool Marked, Pending; public DateTime Changed; }
 
     readonly Writer w;
     readonly List<Unit> units = new List<Unit>();          // 아직 저장 안 된 토막 (말한 순서)
@@ -871,7 +856,6 @@ class SegmentAccumulator
                 // 이전 토막 바로 뒤에 끼워 넣음 (오래된 줄에 토막이 덧붙는 경우)
                 int at = prev + 1 > 0 ? prev + 1 : units.Count;
                 if (at > units.Count) at = units.Count;
-                while (at < units.Count && units[at].IsSpeaker) at++;   // 발언자 표시 뒤에 온 말은 그 뒤로
                 units.Insert(at, u);
                 map[id] = u;
                 prev = at;
@@ -903,12 +887,6 @@ class SegmentAccumulator
             units.RemoveAt(0);
             map.Remove(u.Id);
             done.Add(u.Id);
-            if (u.IsSpeaker)
-            {
-                w.Speaker(u.Text);
-                lastSpk = null; lastSeg = null;   // 다음 말은 이름 줄 바로 아래에서 시작
-                continue;
-            }
             // AI 자막엔 마침표가 거의 없으므로 사이트 화면처럼 토막(stxt 번호)마다 줄을 바꾸고, 발언자가 바뀌면 빈 줄
             string seg = SegOf(u.Id);
             if (overlap)
@@ -953,7 +931,6 @@ class SegmentAccumulator
         sb.Append(WebMark);
         foreach (var u in units)
         {
-            if (u.IsSpeaker) continue;
             if (sb.Length > 1) sb.Append(' ');
             if (u.Pending) sb.Append(PendOn).Append(u.Text).Append(PendOff); else sb.Append(u.Text);
         }
@@ -1166,15 +1143,14 @@ class MainForm : Form
 {
     static readonly Regex TsRx = new Regex(@"(\[\d{2}:\d{2}:\d{2}\] )");
 
-    RoundButton btnRec, btnResume, btnHelp, btnSettings, btnWebcast, btnNotepad, btnFolder, btnDiag, btnSpeaker;
+    RoundButton btnRec, btnResume, btnHelp, btnSettings, btnWebcast, btnNotepad, btnFolder, btnDiag;
     StatusPill pill;
     Label lblStats, lblLiveTitle, lblLogTitle, lgPend, lgWait;
     RichTextBox liveBox;
     LinkLabel lnkFile;
     CheckBox chkTop, chkScroll;
-    TextBox txtSpeaker;
     RichTextBox rtb;
-    Font fText, fTs, fSmall, fBold, fSpeaker;
+    Font fText, fTs, fSmall, fBold;
     System.Windows.Forms.Timer tick;
 
     // 환경설정 (settings.txt에 기억)
@@ -1194,10 +1170,6 @@ class MainForm : Form
     // 테마를 바꿀 때 화면을 다시 그리기 위해 보관
     readonly StringBuilder logHistory = new StringBuilder();
     string prevTail = "", lastLiveShown = "";
-
-    // 화면에서 넣은 발언자 이름 → 기록 스레드가 순서에 맞춰 파일에 씀
-    readonly System.Collections.Concurrent.ConcurrentQueue<string> speakerQ = new System.Collections.Concurrent.ConcurrentQueue<string>();
-    readonly AutoCompleteStringCollection speakerNames = new AutoCompleteStringCollection();
 
     public MainForm()
     {
@@ -1220,11 +1192,8 @@ class MainForm : Form
         fTs = new Font("Consolas", 9.5f);
         fSmall = new Font(Theme.FontName, 8.5f);
         fBold = new Font(Theme.FontName, 13f, FontStyle.Bold);
-        fSpeaker = new Font(Theme.FontName, 11f, FontStyle.Bold);
 
         LoadPrefs();
-        string names = Settings.Get("speakers");
-        if (!string.IsNullOrEmpty(names)) speakerNames.AddRange(names.Split('|'));
 
         BuildUi();
         Theme.TitleBar(this);   // CreateGraphics로 창이 이미 만들어졌으므로 바로 적용
@@ -1234,7 +1203,7 @@ class MainForm : Form
         tick.Tick += delegate { OnTick(); };
         tick.Start();
 
-        KeyPress += delegate (object s, KeyPressEventArgs e) { if (e.KeyChar == '?' && !rtb.Focused && !txtSpeaker.Focused) { e.Handled = true; ShowAbout(); } };
+        KeyPress += delegate (object s, KeyPressEventArgs e) { if (e.KeyChar == '?' && !rtb.Focused) { e.Handled = true; ShowAbout(); } };
         KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.F1) { e.Handled = true; ShowAbout(); } };
         FormClosing += delegate { StopRec(); };
     }
@@ -1325,23 +1294,10 @@ class MainForm : Form
         };
         liveWrap.Controls.Add(liveCard);
 
-        // ---- 저장된 기록 카드 (머리줄: 제목 · 발언자 넣기 · 버튼들)
+        // ---- 저장된 기록 카드
         var logWrap = new Panel { Dock = DockStyle.Fill, Padding = new Padding(S(18), 0, S(18), S(6)), BackColor = Theme.Bg };
         var logCard = new Card { Dock = DockStyle.Fill, Padding = new Padding(S(14), S(48), S(6), S(10)) };
-        lblLogTitle = new Label { Text = "저장된 기록", Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(14), S(17)), BackColor = Theme.Card };
-        // 발언자 이름: 치고 Enter → 그 시점에 "▶ 이름" 줄을 넣음 (국회 AI 자막엔 이름이 없음)
-        txtSpeaker = new TextBox { Font = new Font(Theme.FontName, 9.5f), BorderStyle = BorderStyle.FixedSingle, BackColor = Theme.Bg, ForeColor = Theme.Text,
-                                   AutoCompleteMode = AutoCompleteMode.SuggestAppend, AutoCompleteSource = AutoCompleteSource.CustomSource, AutoCompleteCustomSource = speakerNames };
-        txtSpeaker.HandleCreated += delegate { SendMessage(txtSpeaker.Handle, EM_SETCUEBANNER, new IntPtr(1), "발언자 이름 입력 후 Enter (예: 김OO 위원)"); };
-        txtSpeaker.KeyDown += delegate (object s, KeyEventArgs e)
-        {
-            if (e.KeyCode != Keys.Enter) return;
-            e.Handled = e.SuppressKeyPress = true;
-            AddSpeaker();
-        };
-        btnSpeaker = SmallButton("발언자 넣기");
-        btnSpeaker.BaseColor = Theme.AccentBg; btnSpeaker.HoverColor = Theme.AccentHover; btnSpeaker.ForeColor2 = Theme.Blue;
-        btnSpeaker.Click += delegate { AddSpeaker(); };
+        lblLogTitle = new Label { Text = "저장된 기록 (파일에 쓰인 그대로)", Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(14), S(17)), BackColor = Theme.Card };
         btnNotepad = SmallButton("메모장으로 열기");
         btnNotepad.Click += delegate { OpenInNotepad(); };
         btnFolder = SmallButton("폴더 열기");
@@ -1350,16 +1306,11 @@ class MainForm : Form
         btnDiag.Click += delegate { SaveDiag(true); };
         rtb = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Card, ForeColor = Theme.Text,
                                 Font = fText, DetectUrls = false, HideSelection = false, ScrollBars = RichTextBoxScrollBars.Vertical };
-        logCard.Controls.AddRange(new Control[] { rtb, lblLogTitle, txtSpeaker, btnSpeaker, btnNotepad, btnFolder, btnDiag });
+        logCard.Controls.AddRange(new Control[] { rtb, lblLogTitle, btnNotepad, btnFolder, btnDiag });
         logCard.Resize += delegate
         {
             int x = logCard.Width - S(10);
             foreach (var b in new[] { btnDiag, btnFolder, btnNotepad }) { x -= b.Width; b.Location = new Point(x, S(11)); x -= S(6); }
-            int left = lblLogTitle.Right + S(12);
-            int right = btnNotepad.Left - S(14);
-            btnSpeaker.Location = new Point(right - btnSpeaker.Width, S(11));
-            txtSpeaker.Location = new Point(left, S(12));
-            txtSpeaker.Width = Math.Max(S(80), btnSpeaker.Left - S(6) - left);
         };
         logWrap.Controls.Add(logCard);
 
@@ -1387,30 +1338,12 @@ class MainForm : Form
         Controls.Add(header);
     }
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string lp);
-    const int EM_SETCUEBANNER = 0x1501;
-
-    void AddSpeaker()
-    {
-        string name = Regex.Replace(txtSpeaker.Text ?? "", @"\s+", " ").Trim();
-        if (name.Length == 0) return;
-        if (!running) { MessageBox.Show(this, "기록 중일 때 발언자를 넣을 수 있습니다.", AppInfo.Name); return; }
-        speakerQ.Enqueue(name);
-        // 자동완성 목록에 기억 (최근 것이 앞, 최대 50명)
-        var list = new List<string> { name };
-        foreach (string n in speakerNames) if (n != name && list.Count < 50) list.Add(n);
-        speakerNames.Clear(); speakerNames.AddRange(list.ToArray());
-        Settings.Set("speakers", string.Join("|", list.ToArray()));
-        txtSpeaker.Clear();
-    }
-
     // 테마를 바꾸면 화면을 새 색으로 다시 만들고 상태를 되살림
     void RebuildUi()
     {
         string pillText = pill.Text; Color pillDot = pill.DotColor;
         string liveTitle = lblLiveTitle.Text; bool legend = lgPend.Visible;
         string fileText = lnkFile.Text; bool scroll = chkScroll.Checked; bool resumeVisible = btnResume.Visible;
-        string speakerDraft = txtSpeaker.Text;
         SuspendLayout();
         var old = new List<Control>();
         foreach (Control c in Controls) old.Add(c);
@@ -1421,7 +1354,6 @@ class MainForm : Form
         pill.Set(pillText, pillDot);
         lblLiveTitle.Text = liveTitle; lgPend.Visible = lgWait.Visible = legend;
         lnkFile.Text = fileText; chkScroll.Checked = scroll; btnResume.Visible = resumeVisible;
-        txtSpeaker.Text = speakerDraft;
         if (running) { btnRec.Text = "기록 중지"; btnRec.Glyph = GlyphStop; btnRec.BaseColor = Theme.Dark; btnRec.HoverColor = Theme.DarkHover; }
         RenderLog();
         SetLive(lastLiveShown);
@@ -1589,8 +1521,6 @@ class MainForm : Form
         if (logHistory.Length > 0) RenderChunk(logHistory.ToString());
     }
 
-    static readonly Regex SpeakerRx = new Regex(@"^▶ ");
-
     void RenderChunk(string s)
     {
         int selStart = rtb.SelectionStart, selLen = rtb.SelectionLength;
@@ -1606,11 +1536,10 @@ class MainForm : Form
         {
             if (piece.Length == 0) continue;
             bool ts = TsRx.IsMatch(piece);
-            bool spk = !ts && SpeakerRx.IsMatch(piece);   // "▶ 이름" 발언자 줄은 굵은 파란 글씨
             rtb.SelectionStart = rtb.TextLength;
             rtb.SelectionLength = 0;
-            rtb.SelectionColor = ts ? Theme.Faint : spk ? Theme.Blue : Theme.Text;
-            rtb.SelectionFont = ts ? fTs : spk ? fSpeaker : fText;
+            rtb.SelectionColor = ts ? Theme.Faint : Theme.Text;
+            rtb.SelectionFont = ts ? fTs : fText;
             rtb.AppendText(piece);
         }
         if (follow) { rtb.SelectionStart = rtb.TextLength; rtb.SelectionLength = 0; rtb.ScrollToCaret(); }
@@ -1770,17 +1699,6 @@ class MainForm : Form
         });
     }
 
-    // 화면에서 넣은 발언자 이름 반영: 의사중계는 대기 중인 토막 뒤에 끼우고, 크롬 자막은 보류분을 저장한 뒤 바로 씀
-    void DrainSpeakers(bool webcast, SegmentAccumulator seg, Accumulator acc, Writer writer)
-    {
-        string name;
-        while (speakerQ.TryDequeue(out name))
-        {
-            if (webcast) seg.MarkSpeaker(name);
-            else { acc.Flush(); writer.Speaker(name); }
-        }
-    }
-
     // 자막 출처는 매번 자동 선택: CCR 전용 창에 의사중계 플레이어가 열려 있으면 국회 AI 자막, 아니면 크롬 실시간 자막
     void Loop(string file, bool resume)
     {
@@ -1807,7 +1725,6 @@ class MainForm : Form
         {
             while (running)
             {
-                DrainSpeakers(state == 2, seg, acc, writer);
                 WebcastResult wr = web.Poll();
                 if (wr != null)
                 {
@@ -1862,7 +1779,6 @@ class MainForm : Form
         catch (Exception ex) { SetStatus("오류: " + ex.Message, Theme.Red); }
         finally
         {
-            try { DrainSpeakers(state == 2, seg, acc, writer); } catch { }
             try { acc.Flush(); } catch { }
             try { seg.Flush(); } catch { }
             web.Dispose();
