@@ -19,15 +19,15 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("크롬 실시간 자막 누적 저장기")]
 [assembly: AssemblyCompany("kinphw")]
 [assembly: AssemblyCopyright("kinphw")]
-[assembly: AssemblyVersion("0.0.3.0")]
-[assembly: AssemblyFileVersion("0.0.3.0")]
-[assembly: AssemblyInformationalVersion("0.0.3")]
+[assembly: AssemblyVersion("0.0.4.0")]
+[assembly: AssemblyFileVersion("0.0.4.0")]
+[assembly: AssemblyInformationalVersion("0.0.4")]
 
 static class AppInfo
 {
     public const string Name = "CCR";
     public const string LongName = "Chrome Caption Recorder";
-    public const string Version = "0.0.3";
+    public const string Version = "0.0.4";
     public const string Author = "kinphw";
 
     public static string AboutText()
@@ -64,6 +64,12 @@ static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         var form = new MainForm();
         if (args.Length >= 1 && args[0] == "--autostart") form.Shown += delegate { form.AutoStart(); };   // 실행하자마자 기록 시작
+        // 기록 txt를 ccr.exe에 끌어다 놓으면 그 파일에 바로 이어서 기록
+        if (args.Length == 1 && args[0].EndsWith(".txt", StringComparison.OrdinalIgnoreCase) && File.Exists(args[0]))
+        {
+            string f = Path.GetFullPath(args[0]);
+            form.Shown += delegate { form.AutoStart(f); };
+        }
         Application.Run(form);
     }
 }
@@ -227,6 +233,9 @@ class Accumulator
 
     public Accumulator(Writer w) { this.w = w; }
 
+    // 이어 쓰기: 파일 끝부분을 "이미 저장한 것"으로 두면 말풍선에 남은 부분과 자연히 이어짐
+    public void Resume(string tail) { saved = tail.Length > 2000 ? tail.Substring(tail.Length - 2000) : tail; }
+
     public static string Normalize(string s) { return Regex.Replace(s ?? "", @"\s+", " ").Trim(); }
 
     // 새 텍스트에서 아직 저장 안 된 부분, 이어지는 지점이 없으면 null
@@ -292,7 +301,52 @@ class Writer
     bool any;
     public event Action<string> Written;
 
-    public Writer(string path) { this.path = path; }
+    public Writer(string path)
+    {
+        this.path = path;
+        // 기존 파일에 이어 쓰면 끝이 줄바꿈인지 보고 이어감
+        try
+        {
+            var fi = new FileInfo(path);
+            if (fi.Exists && fi.Length > 0)
+            {
+                any = true;
+                using (var fs = File.OpenRead(path)) { fs.Seek(-1, SeekOrigin.End); atLineStart = fs.ReadByte() == '\n'; }
+            }
+        }
+        catch { }
+    }
+
+    // 이어 쓰기용: 파일 끝부분(시각 표시 빼고 공백 정리)
+    public static string ReadTail(string path, int chars)
+    {
+        try
+        {
+            string all = File.ReadAllText(path, Encoding.UTF8);
+            if (all.Length > chars) all = all.Substring(all.Length - chars);
+            return Squash(all);
+        }
+        catch { return ""; }
+    }
+
+    // 파일의 마지막 자막 줄 (빈 줄·회의명·구분선 제외)
+    public static string LastTextLine(string path)
+    {
+        try
+        {
+            string[] lines = File.ReadAllLines(path, Encoding.UTF8);
+            for (int i = lines.Length - 1; i >= 0 && i >= lines.Length - 50; i--)
+            {
+                string l = lines[i].Trim();
+                if (l.Length == 0 || l.StartsWith("■ ") || l.StartsWith("──")) continue;
+                return l;
+            }
+        }
+        catch { }
+        return "";
+    }
+
+    public static string Squash(string s) { return Regex.Replace(Regex.Replace(s ?? "", @"\[\d{2}:\d{2}:\d{2}\] ", ""), @"\s+", " ").Trim(); }
 
     // 문장 끝(. ? !)에서 줄바꿈, 줄 머리에 시각 표시. '\n'은 강제 줄바꿈
     public void Write(string chunk)
@@ -566,6 +620,17 @@ class SegmentAccumulator
     readonly Dictionary<string, Unit> map = new Dictionary<string, Unit>();
     readonly HashSet<string> done = new HashSet<string>();  // 저장한 토막 id
     string lastSpk, lastSeg;
+    string resumeTail = "";
+    bool overlap;   // 이어 쓰기 직후: 사이트 자막 칸에 남은 줄 중 이미 파일에 있는 것은 건너뜀
+
+    string resumeLast = "";   // 이어 쓰는 파일의 마지막 문장 줄 (끌 때 말하던 도중이던 토막일 수 있음)
+
+    public void Resume(string tail, string lastLine)
+    {
+        resumeTail = tail ?? "";
+        resumeLast = Writer.Squash(lastLine);
+        overlap = resumeTail.Length > 0;
+    }
     string meeting;
     public string Meeting { get { return meeting; } }
 
@@ -573,6 +638,8 @@ class SegmentAccumulator
 
     public void Feed(WebcastResult r)
     {
+        if (meeting == null && !string.IsNullOrEmpty(r.Meeting) && resumeTail.Contains("■ " + Writer.Squash(r.Meeting)))
+            meeting = r.Meeting;   // 이어 쓰는 파일에 이미 같은 회의명이 있음
         if (!string.IsNullOrEmpty(r.Meeting) && r.Meeting != meeting)
         {
             meeting = r.Meeting;
@@ -627,6 +694,20 @@ class SegmentAccumulator
             done.Add(u.Id);
             // AI 자막엔 마침표가 거의 없으므로 사이트 화면처럼 토막(stxt 번호)마다 줄을 바꾸고, 발언자가 바뀌면 빈 줄
             string seg = SegOf(u.Id);
+            if (overlap)
+            {
+                string n = Writer.Squash(u.Text);
+                if (n.Length > 0 && resumeTail.Contains(n))
+                {
+                    if (u.Spk != "") lastSpk = u.Spk;
+                    lastSeg = seg;
+                    continue;
+                }
+                overlap = false;   // 파일에 없는 첫 토막부터 저장
+                // 끌 때 반쯤 저장된 토막이 그새 길어졌으면 이미 적힌 앞부분은 빼고 나머지만
+                if (resumeLast.Length >= 4 && n.StartsWith(resumeLast) && n.Length > resumeLast.Length)
+                    u.Text = "… " + n.Substring(resumeLast.Length).Trim();
+            }
             if (u.Marked || (u.Spk != "" && lastSpk != null && u.Spk != lastSpk)) w.Paragraph();
             else if (seg != lastSeg) w.LineBreak();
             else u.Text = " " + u.Text;   // 같은 토막의 이어지는 조각
@@ -827,7 +908,7 @@ class MainForm : Form
 {
     static readonly Regex TsRx = new Regex(@"(\[\d{2}:\d{2}:\d{2}\] )");
 
-    RoundButton btnRec, btnHelp, btnWebcast, btnNotepad, btnFolder, btnDiag;
+    RoundButton btnRec, btnResume, btnHelp, btnWebcast, btnNotepad, btnFolder, btnDiag;
     StatusPill pill;
     Label lblStats, lblLiveTitle, lblLogTitle, lgPend, lgWait;
     RichTextBox liveBox;
@@ -913,25 +994,34 @@ class MainForm : Form
                                    BaseColor = Theme.Red, HoverColor = Theme.RedHover, ForeColor2 = Color.White, Font = new Font(Theme.FontName, 11f, FontStyle.Bold) };
         btnRec.Glyph = GlyphRec;
         btnRec.Click += delegate { if (running) StopRec(); else StartRec(); };
+        btnResume = new RoundButton { Text = "이어서 기록…", Height = S(36), Location = new Point(S(176), S(21)), Radius = 8,
+                                      Font = new Font(Theme.FontName, 9.5f, FontStyle.Bold), ForeColor2 = Theme.Dark,
+                                      BaseColor = Color.White, HoverColor = Theme.GhostHover };
+        btnResume.Width = TextRenderer.MeasureText(btnResume.Text, btnResume.Font).Width + S(26);
+        btnResume.Click += delegate { if (!running) ResumeRec(); };
         pill = new StatusPill { Location = new Point(S(184), S(25)), Size = new Size(S(330), S(28)), Font = new Font(Theme.FontName, 9.5f, FontStyle.Bold) };
         pill.Set("대기 중", Theme.Faint);
         lblStats = new Label { Text = "", Font = new Font(Theme.FontName, 9.5f), ForeColor = Theme.Sub, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Size = new Size(S(240), S(28)), BackColor = Color.Transparent };
-        bar.Controls.AddRange(new Control[] { btnRec, pill, lblStats });
-        bar.Resize += delegate
+        bar.Controls.AddRange(new Control[] { btnRec, btnResume, pill, lblStats });
+        EventHandler relayout = delegate
         {
             lblStats.Location = new Point(bar.Width - S(18) - lblStats.Width, S(25));
+            // 대기 중엔 [이어서 기록…] 버튼 뒤, 기록 중엔 버튼이 숨으므로 기록 버튼 바로 뒤
+            pill.Left = btnResume.Visible ? btnResume.Right + S(10) : S(184);
             pill.Width = Math.Max(S(120), lblStats.Left - pill.Left - S(8));
         };
+        bar.Resize += relayout;
+        btnResume.VisibleChanged += relayout;
 
         // ---- 실시간 인식 카드
         var liveWrap = new Panel { Dock = DockStyle.Top, Height = S(92), Padding = new Padding(S(18), 0, S(18), S(10)), BackColor = Theme.Bg };
         var liveCard = new Card { Dock = DockStyle.Fill };
-        lblLiveTitle = new Label { Text = "실시간 인식 (크롬 자막 말풍선)", Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(14), S(9)), BackColor = Theme.Card };
+        lblLiveTitle = new Label { Text = "실시간 인식", Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(14), S(9)), BackColor = Theme.Card };
         liveBox = new RichTextBox { ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Card, ScrollBars = RichTextBoxScrollBars.None,
                                     Font = fText, Location = new Point(S(14), S(30)), Height = S(46), TabStop = false, DetectUrls = false, Cursor = Cursors.Default };
         // 범례: 인식 중(잠정) / 확정·저장 대기
-        lgPend = new Label { Text = " 인식 중(잠정) ", Font = fSmall, ForeColor = Theme.Blue, BackColor = PendBack, AutoSize = true };
-        lgWait = new Label { Text = "확정 · 저장 대기", Font = fSmall, ForeColor = Theme.Text, BackColor = Theme.Card, AutoSize = true };
+        lgPend = new Label { Text = " 인식 중(잠정) ", Font = fSmall, ForeColor = Theme.Blue, BackColor = PendBack, AutoSize = true, Visible = false };
+        lgWait = new Label { Text = "확정 · 저장 대기", Font = fSmall, ForeColor = Theme.Text, BackColor = Theme.Card, AutoSize = true, Visible = false };
         liveCard.Controls.AddRange(new Control[] { lblLiveTitle, liveBox, lgPend, lgWait });
         liveCard.Resize += delegate
         {
@@ -1142,12 +1232,33 @@ class MainForm : Form
         }
     }
 
-    void StartRec()
+    // 이어서 기록: 기존 기록 파일을 골라 그 끝에 계속 씀 (가장 최근 파일이 기본 선택)
+    void ResumeRec()
     {
-        currentFile = Path.Combine(saveDir, "자막_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".txt");
-        lnkFile.Text = "저장 파일: " + currentFile;
+        using (var dlg = new OpenFileDialog { Title = "이어서 기록할 파일 선택", Filter = "자막 기록 (*.txt)|*.txt|모든 파일 (*.*)|*.*", InitialDirectory = saveDir })
+        {
+            FileInfo latest = null;
+            try
+            {
+                foreach (var f in new DirectoryInfo(saveDir).GetFiles("자막_*.txt"))
+                    if (!f.Name.StartsWith("자막_진단") && (latest == null || f.LastWriteTime > latest.LastWriteTime)) latest = f;
+            }
+            catch { }
+            if (latest != null) dlg.FileName = latest.Name;
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            StartRec(dlg.FileName);
+        }
+    }
+
+    void StartRec(string resumeFile = null)
+    {
+        bool resume = resumeFile != null;
+        currentFile = resume ? resumeFile : Path.Combine(saveDir, "자막_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".txt");
+        lnkFile.Text = (resume ? "이어서 저장 중: " : "저장 파일: ") + currentFile;
         rtb.Clear();
         lineCount = 0; charCount = 0;
+        if (resume) ShowPrevious(currentFile);
+        btnResume.Visible = false;
         recStart = DateTime.Now;
         running = true;
         btnRec.Text = "기록 중지";
@@ -1158,12 +1269,29 @@ class MainForm : Form
         SetLive("");
         OnTick();
         string file = currentFile;
-        worker = new Thread(delegate () { Loop(file); });
+        worker = new Thread(delegate () { Loop(file, resume); });
         worker.IsBackground = true;
         worker.Start();
     }
 
-    public void AutoStart() { if (!running) StartRec(); }
+    // 이어 쓰는 파일의 마지막 부분을 흐리게 보여줌 (맥락 확인용, 통계에는 안 셈)
+    void ShowPrevious(string file)
+    {
+        try
+        {
+            string all = File.ReadAllText(file, Encoding.UTF8);
+            int from = Math.Max(0, all.Length - 3000);
+            int nl = all.IndexOf('\n', from);
+            string tail = (from > 0 && nl >= 0) ? all.Substring(nl + 1) : all.Substring(from);
+            rtb.SelectionStart = rtb.TextLength;
+            rtb.SelectionColor = Theme.Faint;
+            rtb.SelectionFont = fText;
+            rtb.AppendText((from > 0 ? "…\r\n" : "") + tail.TrimEnd() + "\r\n");
+        }
+        catch { }
+    }
+
+    public void AutoStart(string resumeFile = null) { if (!running) StartRec(resumeFile); }
 
     void StopRec()
     {
@@ -1174,6 +1302,7 @@ class MainForm : Form
         btnRec.Glyph = GlyphRec;
         btnRec.BaseColor = Theme.Red; btnRec.HoverColor = Theme.RedHover;
         btnRec.Invalidate();
+        btnResume.Visible = true;
         pill.Set(File.Exists(currentFile) ? "중지됨 · 저장 완료" : "중지됨 · 저장된 내용 없음", Theme.Sub);
         SetLive("");
     }
@@ -1211,14 +1340,22 @@ class MainForm : Form
     }
 
     // 자막 출처는 매번 자동 선택: CCR 전용 창에 의사중계 플레이어가 열려 있으면 국회 AI 자막, 아니면 크롬 실시간 자막
-    void Loop(string file)
+    void Loop(string file, bool resume)
     {
+        string tail = resume ? Writer.ReadTail(file, 6000) : "";
         var writer = new Writer(file);
         writer.Written += delegate (string s) { Ui(delegate { AppendLog(s); }); };
+        if (resume)
+        {
+            writer.Paragraph();
+            writer.Note("── 이어서 기록 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " · " + AppInfo.Name + " " + AppInfo.Version + " ──");
+        }
         var reader = new CaptionReader();
         var acc = new Accumulator(writer);
         var web = new WebcastSource();
         var seg = new SegmentAccumulator(writer);
+        acc.Resume(tail);
+        seg.Resume(tail, resume ? Writer.LastTextLine(file) : "");
         DateTime start = DateTime.Now, lastChange = DateTime.Now;
         string last = null, lastLive = null, pointerMeeting = null;
         Pointer.Write(file, "", null, true);
