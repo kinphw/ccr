@@ -19,15 +19,15 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("크롬 실시간 자막 누적 저장기")]
 [assembly: AssemblyCompany("kinphw")]
 [assembly: AssemblyCopyright("kinphw")]
-[assembly: AssemblyVersion("0.0.7.0")]
-[assembly: AssemblyFileVersion("0.0.7.0")]
-[assembly: AssemblyInformationalVersion("0.0.7")]
+[assembly: AssemblyVersion("0.0.8.0")]
+[assembly: AssemblyFileVersion("0.0.8.0")]
+[assembly: AssemblyInformationalVersion("0.0.8")]
 
 static class AppInfo
 {
     public const string Name = "CCR";
     public const string LongName = "Chrome Caption Recorder";
-    public const string Version = "0.0.7";
+    public const string Version = "0.0.8";
     public const string Author = "kinphw with CLAUDE";
 
     // 정보 창·ccr.exe /? 에 쓰는 항목 (이름, 값)
@@ -520,7 +520,6 @@ class Writer
         Emit(sb.ToString());
     }
 
-    // 문단 나눔 (발언자 바뀜 등): 줄을 끝내고 빈 줄 하나
     // 줄만 끝냄 (이미 줄 머리면 아무것도 안 함)
     public void LineBreak()
     {
@@ -529,6 +528,7 @@ class Writer
         atLineStart = true;
     }
 
+    // 문단 나눔 (발언자 바뀜 등): 줄을 끝내고 빈 줄 하나
     public void Paragraph()
     {
         if (!any) return;
@@ -543,14 +543,59 @@ class Writer
         atLineStart = true;
     }
 
+    // 아직 파일에 못 쓴 내용. 파일이 잠깐 잠겨(동기화 폴더·백신·엑셀 등) 쓰기가 실패하면 여기 모아 두고 다시 씀
+    readonly StringBuilder unsaved = new StringBuilder();
+    public int UnsavedChars { get { return unsaved.Length; } }
+    public int Failures { get; private set; }      // 연속 실패 횟수
+    public string LastError { get; private set; }
+
     void Emit(string s)
     {
         if (s.Length == 0) return;
         any = true;
-        // 매번 열고 닫으므로 기록 중에도 다른 프로그램에서 파일을 열어볼 수 있음
-        File.AppendAllText(path, s, Utf8);
-        var h = Written;
+        unsaved.Append(s);
+        Flush();
+        var h = Written;   // 화면에는 바로 보여줌 (파일은 Flush가 재시도)
         if (h != null) h(s);
+    }
+
+    // 모아 둔 내용을 파일 끝에 씀. 실패하면 그대로 두고 false (기록은 계속됨, 다음에 다시 시도)
+    // 매번 열고 닫으므로 기록 중에도 다른 프로그램에서 파일을 열어볼 수 있음
+    public bool Flush()
+    {
+        if (unsaved.Length == 0) return true;
+        try
+        {
+            File.AppendAllText(path, unsaved.ToString(), Utf8);
+            unsaved.Length = 0;
+            Failures = 0; LastError = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Failures++; LastError = ex.Message;
+            return false;
+        }
+    }
+
+    // 끝낼 때까지 못 쓴 내용을 다른 파일에 살려 둠. 저장한 경로(못 하면 null)
+    public string Rescue()
+    {
+        if (unsaved.Length == 0) return null;
+        string name = Path.GetFileNameWithoutExtension(path) + "_미저장분_" + DateTime.Now.ToString("HHmmss") + ".txt";
+        foreach (var dir in new[] { Path.GetDirectoryName(path), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "CCR") })
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                string p = Path.Combine(dir, name);
+                File.WriteAllText(p, "※ " + Path.GetFileName(path) + " 에 저장하지 못한 뒷부분 (그 파일 끝에 이어 붙이면 됨)\r\n" + unsaved, Utf8);
+                unsaved.Length = 0;
+                return p;
+            }
+            catch { }
+        }
+        return null;
     }
 }
 
@@ -1719,69 +1764,88 @@ class MainForm : Form
         DateTime start = DateTime.Now, lastChange = DateTime.Now;
         string last = null, lastLive = null, pointerMeeting = null;
         Pointer.Write(file, "", null, true);
-        bool diagDone = false;
+        bool diagDone = false, saveWarn = false;
         int state = -1;
+
+        // 0.4초마다 한 번: 자막 출처를 골라 읽고 누적 (의사중계 창이 있으면 그쪽, 없으면 크롬 실시간 자막)
+        Action step = delegate
+        {
+            WebcastResult wr = web.Poll();
+            if (wr != null)
+            {
+                if (state != 2)
+                {
+                    acc.Flush();
+                    SetStatus("기록 중 · 국회 의사중계 AI 자막", Theme.Green);
+                    SetSourceTitle("국회 의사중계 AI 자막");
+                    state = 2;
+                }
+                seg.BySegment = bySegment;
+                seg.Feed(wr);
+                string live = seg.LiveText();
+                if (live != lastLive) { SetLive(live); lastLive = live; }
+                if (seg.Meeting != pointerMeeting) { pointerMeeting = seg.Meeting; Pointer.Write(file, "webcast", pointerMeeting, true); }
+                return;
+            }
+            if (state == 2) { seg.Flush(); lastLive = null; }
+
+            string raw = null;
+            try { raw = reader.Read(); } catch { }
+            if (raw == null)
+            {
+                if (state != 0)
+                {
+                    SetStatus("자막 찾는 중... [국회 의사중계 열기] 창 또는 크롬 실시간 자막을 켜 주세요", Theme.Orange);
+                    SetSourceTitle("자막 출처를 찾는 중");
+                    SetLive(""); state = 0;
+                }
+                if (!diagDone && (DateTime.Now - start).TotalSeconds > 20) { diagDone = true; SaveDiag(false); }
+            }
+            else
+            {
+                if (state != 1) { SetStatus("기록 중 · 크롬 실시간 자막", Theme.Green); SetSourceTitle("크롬 실시간 자막 말풍선"); state = 1; Pointer.Write(file, "chrome-live-caption", null, true); }
+                string t = Accumulator.Normalize(raw);
+                if (t.Length > 0 && t != last)
+                {
+                    acc.Feed(t);
+                    SetLive(t);
+                    last = t;
+                    lastChange = DateTime.Now;
+                }
+                else if ((DateTime.Now - lastChange).TotalSeconds > 3)
+                {
+                    acc.Flush();   // 3초간 변화 없으면 보류분까지 저장
+                }
+            }
+        };
+
         try
         {
             while (running)
             {
-                WebcastResult wr = web.Poll();
-                if (wr != null)
+                // 못 쓴 내용이 있으면 다시 씀. 계속 실패해도 경고만 띄우고 기록은 이어감
+                if (!writer.Flush() && writer.Failures >= 2)
                 {
-                    if (state != 2)
-                    {
-                        acc.Flush();
-                        SetStatus("기록 중 · 국회 의사중계 AI 자막", Theme.Green);
-                        SetSourceTitle("국회 의사중계 AI 자막");
-                        state = 2;
-                    }
-                    seg.BySegment = bySegment;
-                    seg.Feed(wr);
-                    string live = seg.LiveText();
-                    if (live != lastLive) { SetLive(live); lastLive = live; }
-                    if (seg.Meeting != pointerMeeting) { pointerMeeting = seg.Meeting; Pointer.Write(file, "webcast", pointerMeeting, true); }
-                    Thread.Sleep(400);
-                    continue;
+                    string why = Regex.IsMatch(writer.LastError ?? "", "사용 중|being used|another process") ? "다른 프로그램이 파일 사용 중"
+                               : Regex.IsMatch(writer.LastError ?? "", "액세스|denied|권한") ? "쓰기 권한 없음" : "쓰기 실패";
+                    SetStatus("⚠ 파일 저장 재시도 중 · " + writer.UnsavedChars.ToString("N0") + "자 보관 (" + why + ")", Theme.Orange);
+                    saveWarn = true;
                 }
-                if (state == 2) { seg.Flush(); lastLive = null; }
-
-                string raw = null;
-                try { raw = reader.Read(); } catch { }
-                if (raw == null)
-                {
-                    if (state != 0)
-                    {
-                        SetStatus("자막 찾는 중... [국회 의사중계 열기] 창 또는 크롬 실시간 자막을 켜 주세요", Theme.Orange);
-                        SetSourceTitle("자막 출처를 찾는 중");
-                        SetLive(""); state = 0;
-                    }
-                    if (!diagDone && (DateTime.Now - start).TotalSeconds > 20) { diagDone = true; SaveDiag(false); }
-                }
-                else
-                {
-                    if (state != 1) { SetStatus("기록 중 · 크롬 실시간 자막", Theme.Green); SetSourceTitle("크롬 실시간 자막 말풍선"); state = 1; Pointer.Write(file, "chrome-live-caption", null, true); }
-                    string t = Accumulator.Normalize(raw);
-                    if (t.Length > 0 && t != last)
-                    {
-                        acc.Feed(t);
-                        SetLive(t);
-                        last = t;
-                        lastChange = DateTime.Now;
-                    }
-                    else if ((DateTime.Now - lastChange).TotalSeconds > 3)
-                    {
-                        acc.Flush();   // 3초간 변화 없으면 보류분까지 저장
-                    }
-                }
+                else if (saveWarn && writer.UnsavedChars == 0) { saveWarn = false; state = -1; }   // 복구되면 원래 상태 표시로
+                try { step(); }
+                catch (Exception ex) { SetStatus("오류 (기록은 계속): " + ex.Message, Theme.Red); }   // 한 번의 오류로 기록이 멈추지 않게
                 Thread.Sleep(400);
             }
         }
-        catch (Exception ex) { SetStatus("오류: " + ex.Message, Theme.Red); }
         finally
         {
             try { acc.Flush(); } catch { }
             try { seg.Flush(); } catch { }
             web.Dispose();
+            // 끝낼 때 못 쓴 내용: 잠깐 더 재시도하고, 그래도 안 되면 다른 파일에 살려 둠
+            for (int i = 0; i < 5 && !writer.Flush(); i++) Thread.Sleep(200);
+            string rescued = writer.Rescue();
+            if (rescued != null) Ui(delegate { MessageBox.Show(this, "기록 파일에 쓰지 못한 뒷부분을 아래 파일에 따로 저장했습니다.\r\n\r\n" + rescued, AppInfo.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning); });
             Pointer.Write(file, state == 2 ? "webcast" : state == 1 ? "chrome-live-caption" : "", pointerMeeting, false);
         }
     }
@@ -1835,6 +1899,30 @@ static class SelfTest
             var f = new MainForm();
             f.Shown += delegate { f.Demo(); };
             Application.Run(f);
+            return;
+        }
+        if (outPath.StartsWith("lock:"))   // lock:출력파일 - 파일이 잠긴 동안 쓴 내용이 보관됐다가 풀리면 빠짐없이 들어가는지
+        {
+            string f = outPath.Substring(5);
+            if (File.Exists(f)) File.Delete(f);
+            var w = new Writer(f);
+            var log = new StringBuilder();
+            w.Write("잠기기 전 첫 줄"); w.LineBreak();
+            using (new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.None))   // 다른 프로그램이 독점으로 연 상황
+            {
+                w.Write("잠긴 동안 둘째 줄"); w.LineBreak();
+                w.Write("잠긴 동안 셋째 줄"); w.LineBreak();
+                bool ok = w.Flush();
+                log.AppendLine("잠긴 동안 Flush=" + ok + " 보관=" + w.UnsavedChars + "자 연속실패=" + w.Failures + " 사유=" + w.LastError);
+            }
+            log.AppendLine("풀린 뒤 Flush=" + w.Flush() + " 보관=" + w.UnsavedChars + "자");
+            w.Write("풀린 뒤 넷째 줄"); w.LineBreak();
+            using (new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                w.Write("끝내기 직전 잠김"); w.LineBreak();
+                log.AppendLine("살린 파일=" + w.Rescue());
+            }
+            File.WriteAllText(f + ".log", log.ToString(), Encoding.UTF8);
             return;
         }
         if (outPath.StartsWith("web:"))   // web:초:출력파일 - 화면 없이 의사중계 창만 읽어 저장
