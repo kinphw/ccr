@@ -19,15 +19,15 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("크롬 실시간 자막 누적 저장기")]
 [assembly: AssemblyCompany("kinphw")]
 [assembly: AssemblyCopyright("kinphw")]
-[assembly: AssemblyVersion("0.0.8.0")]
-[assembly: AssemblyFileVersion("0.0.8.0")]
-[assembly: AssemblyInformationalVersion("0.0.8")]
+[assembly: AssemblyVersion("0.0.9.0")]
+[assembly: AssemblyFileVersion("0.0.9.0")]
+[assembly: AssemblyInformationalVersion("0.0.9")]
 
 static class AppInfo
 {
     public const string Name = "CCR";
     public const string LongName = "Chrome Caption Recorder";
-    public const string Version = "0.0.8";
+    public const string Version = "0.0.9";
     public const string Author = "kinphw with CLAUDE";
 
     // 정보 창·ccr.exe /? 에 쓰는 항목 (이름, 값)
@@ -1161,6 +1161,67 @@ class StatusPill : Control
     }
 }
 
+// 가로 슬라이더 (투명도 조절용): 드래그·클릭·마우스 휠
+class Slider : Control
+{
+    public int Min = 20, Max = 100;
+    int val = 100;
+    bool drag;
+    public event EventHandler ValueChanged;
+
+    public Slider()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer |
+                 ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
+        BackColor = Color.Transparent;
+        Cursor = Cursors.Hand;
+        TabStop = false;
+    }
+
+    public int Value
+    {
+        get { return val; }
+        set
+        {
+            int v = Math.Max(Min, Math.Min(Max, value));
+            if (v == val) return;
+            val = v;
+            Invalidate();
+            var h = ValueChanged;
+            if (h != null) h(this, EventArgs.Empty);
+        }
+    }
+
+    float KnobR { get { return Height * 0.34f; } }
+    RectangleF Track { get { float r = KnobR + 1; return new RectangleF(r, Height / 2f - 2, Width - 2 * r, 4); } }
+
+    int FromX(int x)
+    {
+        var t = Track;
+        float f = t.Width <= 0 ? 1 : (x - t.Left) / t.Width;
+        return (int)Math.Round(Min + Math.Max(0f, Math.Min(1f, f)) * (Max - Min));
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e) { drag = true; Capture = true; Value = FromX(e.X); base.OnMouseDown(e); }
+    protected override void OnMouseMove(MouseEventArgs e) { if (drag) Value = FromX(e.X); base.OnMouseMove(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { drag = false; Capture = false; base.OnMouseUp(e); }
+    protected override void OnMouseWheel(MouseEventArgs e) { Value += e.Delta > 0 ? 5 : -5; base.OnMouseWheel(e); }
+    protected override void OnMouseEnter(EventArgs e) { Focus(); base.OnMouseEnter(e); }   // 휠을 받으려면 포커스 필요
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        var t = Track;
+        float x = t.Left + t.Width * (val - Min) / (float)Math.Max(1, Max - Min);
+        using (var p = Theme.Round(t, 2)) using (var br = new SolidBrush(Theme.Border)) g.FillPath(br, p);
+        using (var p = Theme.Round(new RectangleF(t.Left, t.Top, Math.Max(0, x - t.Left), t.Height), 2)) using (var br = new SolidBrush(Theme.Blue)) g.FillPath(br, p);
+        float r = KnobR;
+        using (var br = new SolidBrush(Theme.Card)) g.FillEllipse(br, x - r, Height / 2f - r, 2 * r, 2 * r);
+        using (var pen = new Pen(Theme.Blue, Math.Max(1.5f, Theme.K * 2))) g.DrawEllipse(pen, x - r, Height / 2f - r, 2 * r, 2 * r);
+    }
+}
+
 // 흰 카드 (둥근 모서리 + 테두리)
 class Card : Panel
 {
@@ -1188,7 +1249,10 @@ class MainForm : Form
 {
     static readonly Regex TsRx = new Regex(@"(\[\d{2}:\d{2}:\d{2}\] )");
 
-    RoundButton btnRec, btnResume, btnHelp, btnSettings, btnWebcast, btnNotepad, btnFolder, btnDiag;
+    RoundButton btnRec, btnResume, btnHelp, btnSettings, btnWebcast, btnNotepad, btnFolder, btnDiag, btnSnap;
+    Slider alpha;
+    Label lblAlpha;
+    Rectangle? beforeSnap;   // [오른쪽 40%] 누르기 전 창 위치 (다시 누르면 되돌림)
     StatusPill pill;
     Label lblStats, lblLiveTitle, lblLogTitle, lgPend, lgWait;
     RichTextBox liveBox;
@@ -1226,7 +1290,7 @@ class MainForm : Form
         AutoScaleMode = AutoScaleMode.None;
         Font = new Font(Theme.FontName, 9.5f);
         ClientSize = new Size(S(700), S(620));
-        MinimumSize = new Size(S(560), S(440));
+        MinimumSize = new Size(S(460), S(420));   // 좁은 화면의 40% 폭(약 500px)까지
         StartPosition = FormStartPosition.CenterScreen;
         TopMost = true;
         KeyPreview = true;
@@ -1239,6 +1303,8 @@ class MainForm : Form
         fBold = new Font(Theme.FontName, 13f, FontStyle.Bold);
 
         LoadPrefs();
+        int op;
+        if (int.TryParse(Settings.Get("opacity"), out op) && op >= 20 && op < 100) Opacity = op / 100.0;
 
         BuildUi();
         Theme.TitleBar(this);   // CreateGraphics로 창이 이미 만들어졌으므로 바로 적용
@@ -1250,7 +1316,7 @@ class MainForm : Form
 
         KeyPress += delegate (object s, KeyPressEventArgs e) { if (e.KeyChar == '?' && !rtb.Focused) { e.Handled = true; ShowAbout(); } };
         KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.F1) { e.Handled = true; ShowAbout(); } };
-        FormClosing += delegate { StopRec(); };
+        FormClosing += delegate { StopRec(); Settings.Set("opacity", ((int)Math.Round(Opacity * 100)).ToString()); };
     }
 
     Func<float, int> S;
@@ -1294,6 +1360,9 @@ class MainForm : Form
             btnHelp.Location = new Point(header.Width - S(18) - btnHelp.Width, (header.Height - btnHelp.Height) / 2);
             btnSettings.Location = new Point(btnHelp.Left - S(8) - btnSettings.Width, (header.Height - btnSettings.Height) / 2);
             btnWebcast.Location = new Point(btnSettings.Left - S(8) - btnWebcast.Width, (header.Height - btnWebcast.Height) / 2);
+            // 좁으면 버튼과 겹치는 글자를 숨김 (오른쪽 40% 등)
+            sub.Visible = sub.Right < btnWebcast.Left - S(8);
+            title.Visible = title.Right < btnWebcast.Left - S(8);
         };
 
         // ---- 조작줄
@@ -1316,7 +1385,9 @@ class MainForm : Form
             lblStats.Location = new Point(bar.Width - S(18) - lblStats.Width, S(25));
             // 대기 중엔 [이어서 기록…] 버튼 뒤, 기록 중엔 버튼이 숨으므로 기록 버튼 바로 뒤
             pill.Left = btnResume.Visible ? btnResume.Right + S(10) : S(184);
-            pill.Width = Math.Max(S(120), lblStats.Left - pill.Left - S(8));
+            // 좁으면 경과·줄·글자 수는 숨기고 상태 표시에 자리를 줌
+            lblStats.Visible = lblStats.Left - pill.Left - S(8) >= S(150);
+            pill.Width = Math.Max(S(120), (lblStats.Visible ? lblStats.Left : bar.Width - S(10)) - pill.Left - S(8));
         };
         bar.Resize += relayout;
         btnResume.VisibleChanged += relayout;
@@ -1356,6 +1427,8 @@ class MainForm : Form
         {
             int x = logCard.Width - S(10);
             foreach (var b in new[] { btnDiag, btnFolder, btnNotepad }) { x -= b.Width; b.Location = new Point(x, S(11)); x -= S(6); }
+            lblLogTitle.Text = "저장된 기록 (파일에 쓰인 그대로)";
+            if (lblLogTitle.Right > btnNotepad.Left - S(8)) lblLogTitle.Text = "저장된 기록";
         };
         logWrap.Controls.Add(logCard);
 
@@ -1381,7 +1454,108 @@ class MainForm : Form
         Controls.Add(liveWrap);
         Controls.Add(bar);
         Controls.Add(header);
+        Controls.Add(BuildTopStrip());
     }
+
+    // 맨 위 얇은 줄: 투명도 슬라이더(실시간) · [오른쪽 40%]
+    Panel BuildTopStrip()
+    {
+        var strip = new Panel { Dock = DockStyle.Top, Height = S(34), BackColor = Theme.Bg };
+        strip.Paint += delegate (object s, PaintEventArgs e) { using (var p = new Pen(Theme.Border)) e.Graphics.DrawLine(p, 0, strip.Height - 1, strip.Width, strip.Height - 1); };
+        var lbl = new Label { Text = "투명도", Font = fSmall, ForeColor = Theme.Sub, AutoSize = true, Location = new Point(S(18), S(9)), BackColor = Color.Transparent };
+        alpha = new Slider { Min = 20, Max = 100, Location = new Point(S(66), S(7)), Size = new Size(S(170), S(20)) };
+        alpha.Value = (int)Math.Round(Opacity * 100);
+        lblAlpha = new Label { Font = fSmall, ForeColor = Theme.Text, AutoSize = true, Location = new Point(S(244), S(9)), BackColor = Color.Transparent };
+        lblAlpha.Text = alpha.Value + "%";
+        alpha.ValueChanged += delegate
+        {
+            Opacity = alpha.Value / 100.0;   // 실시간 반영 (끌 때 바로 보임)
+            lblAlpha.Text = alpha.Value + "%";
+        };
+        btnSnap = new RoundButton { Height = S(24), Radius = 6, Font = fSmall, ForeColor2 = Theme.Text, BaseColor = Theme.Button, HoverColor = Theme.ButtonHover };
+        btnSnap.Click += delegate { Snap(); };
+        UpdateSnapButton();
+        strip.Controls.AddRange(new Control[] { lbl, alpha, lblAlpha, btnSnap });
+        strip.Resize += delegate { btnSnap.Location = new Point(strip.Width - S(18) - btnSnap.Width, S(5)); };
+        return strip;
+    }
+
+    void UpdateSnapButton()
+    {
+        if (btnSnap == null) return;
+        btnSnap.Text = beforeSnap.HasValue ? "↩ 원래 크기로" : "▶ 화면 오른쪽 40%";
+        btnSnap.Width = TextRenderer.MeasureText(btnSnap.Text, btnSnap.Font).Width + S(22);
+        if (btnSnap.Parent != null) btnSnap.Left = btnSnap.Parent.Width - S(18) - btnSnap.Width;
+    }
+
+    // 지금 모니터 작업 영역의 오른쪽 40%를 위아래 꽉 차게 차지하고, 의사중계 창이 열려 있으면 왼쪽 60%로 옮김
+    // (1920 화면에서 의사중계 페이지는 60% 폭에서 영상·자막·목록이 잘리지 않음). 다시 누르면 둘 다 원래 자리로
+    void Snap()
+    {
+        if (WindowState != FormWindowState.Normal) WindowState = FormWindowState.Normal;
+        if (beforeSnap.HasValue)
+        {
+            Bounds = beforeSnap.Value;
+            beforeSnap = null;
+            if (webWin != IntPtr.Zero && IsWindow(webWin) && webBefore.HasValue)
+            {
+                var r = webBefore.Value;
+                MoveWindow(webWin, r.X, r.Y, r.Width, r.Height, true);
+            }
+            webWin = IntPtr.Zero; webBefore = null;
+        }
+        else
+        {
+            beforeSnap = Bounds;
+            var wa = Screen.FromControl(this).WorkingArea;
+            int w = Math.Max(MinimumSize.Width, (int)Math.Round(wa.Width * 0.4));
+            Bounds = new Rectangle(wa.Right - w, wa.Top, w, wa.Height);
+            webWin = FindWebcastWindow();
+            if (webWin != IntPtr.Zero)
+            {
+                RECT r;
+                GetWindowRect(webWin, out r);
+                webBefore = Rectangle.FromLTRB(r.L, r.T, r.R, r.B);
+                ShowWindow(webWin, 9);   // SW_RESTORE (최대화돼 있으면 풀어야 옮길 수 있음)
+                MoveWindow(webWin, wa.Left, wa.Top, wa.Width - w, wa.Height, true);
+                SetForegroundWindow(webWin);   // 다른 창 뒤에 깔려 있으면 앞으로 꺼냄
+            }
+            Activate();
+        }
+        UpdateSnapButton();
+    }
+
+    IntPtr webWin;          // [오른쪽 40%]로 함께 옮긴 의사중계 창
+    Rectangle? webBefore;   // 그 창의 원래 자리
+
+    // 제목에 "인터넷의사중계"가 들어간 크롬/엣지 창 (CCR 전용 창이 아니어도 됨)
+    static IntPtr FindWebcastWindow()
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate (IntPtr h, IntPtr l)
+        {
+            if (!IsWindowVisible(h)) return true;
+            var sb = new StringBuilder(512);
+            GetWindowText(h, sb, 512);
+            var cls = new StringBuilder(64);
+            GetClassName(h, cls, 64);
+            if (cls.ToString().StartsWith("Chrome_WidgetWin") && sb.ToString().Contains("인터넷의사중계")) { found = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    struct RECT { public int L, T, R, B; }
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool repaint);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
 
     // 테마를 바꾸면 화면을 새 색으로 다시 만들고 상태를 되살림
     void RebuildUi()
@@ -1399,6 +1573,7 @@ class MainForm : Form
         pill.Set(pillText, pillDot);
         lblLiveTitle.Text = liveTitle; lgPend.Visible = lgWait.Visible = legend;
         lnkFile.Text = fileText; chkScroll.Checked = scroll; btnResume.Visible = resumeVisible;
+        UpdateSnapButton();
         if (running) { btnRec.Text = "기록 중지"; btnRec.Glyph = GlyphStop; btnRec.BaseColor = Theme.Dark; btnRec.HoverColor = Theme.DarkHover; }
         RenderLog();
         SetLive(lastLiveShown);
