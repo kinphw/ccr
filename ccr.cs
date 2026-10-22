@@ -19,15 +19,15 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("크롬 실시간 자막 누적 저장기")]
 [assembly: AssemblyCompany("kinphw")]
 [assembly: AssemblyCopyright("kinphw")]
-[assembly: AssemblyVersion("0.0.9.0")]
-[assembly: AssemblyFileVersion("0.0.9.0")]
-[assembly: AssemblyInformationalVersion("0.0.9")]
+[assembly: AssemblyVersion("0.0.10.0")]
+[assembly: AssemblyFileVersion("0.0.10.0")]
+[assembly: AssemblyInformationalVersion("0.0.10")]
 
 static class AppInfo
 {
     public const string Name = "CCR";
     public const string LongName = "Chrome Caption Recorder";
-    public const string Version = "0.0.9";
+    public const string Version = "0.0.10";
     public const string Author = "kinphw with CLAUDE";
 
     // 정보 창·ccr.exe /? 에 쓰는 항목 (이름, 값)
@@ -1711,7 +1711,7 @@ class MainForm : Form
 
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, ref Point lp);
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr lp);
-    const int WM_SETREDRAW = 0x0B, EM_GETSCROLLPOS = 0x400 + 221, EM_SETSCROLLPOS = 0x400 + 222;
+    const int WM_SETREDRAW = 0x0B, EM_GETSCROLLPOS = 0x400 + 221, EM_SETSCROLLPOS = 0x400 + 222, WM_VSCROLL = 0x115, SB_BOTTOM = 7;
 
     void OnTick()
     {
@@ -1737,12 +1737,23 @@ class MainForm : Form
     void RenderLog()
     {
         rtb.Clear();
-        if (prevTail.Length > 0) { rtb.SelectionColor = Theme.Faint; rtb.SelectionFont = fText; rtb.AppendText(prevTail); }
+        heldBreaks = "";
+        if (prevTail.Length > 0) { rtb.SelectionColor = Theme.Faint; rtb.SelectionFont = fText; rtb.AppendText(prevTail.TrimEnd('\r', '\n')); heldBreaks = "\r\n"; }
         if (logHistory.Length > 0) RenderChunk(logHistory.ToString());
     }
 
+    // 화면에서만: 끝의 줄바꿈은 다음 글자가 올 때까지 미룸 → 맨 아래에 빈 줄이 남지 않고 마지막 문장이 맨 아래 줄에 옴
+    string heldBreaks = "";
+
     void RenderChunk(string s)
     {
+        s = heldBreaks + s;
+        int keep = s.Length;
+        while (keep > 0 && (s[keep - 1] == '\n' || s[keep - 1] == '\r')) keep--;
+        heldBreaks = s.Substring(keep);
+        s = s.Substring(0, keep);
+        if (s.Length == 0) return;
+
         int selStart = rtb.SelectionStart, selLen = rtb.SelectionLength;
         bool follow = chkScroll.Checked;
         // 자동 스크롤을 끄면 읽던 위치를 그대로 두고 아래에만 덧붙임 (파일 저장은 항상 계속됨)
@@ -1762,7 +1773,12 @@ class MainForm : Form
             rtb.SelectionFont = ts ? fTs : fText;
             rtb.AppendText(piece);
         }
-        if (follow) { rtb.SelectionStart = rtb.TextLength; rtb.SelectionLength = 0; rtb.ScrollToCaret(); }
+        if (follow)
+        {
+            // ScrollToCaret은 끝 줄을 "보이게만" 해서 한 줄 위에서 멈추기도 함 → 스크롤바를 맨 아래로 내림
+            rtb.SelectionStart = rtb.TextLength; rtb.SelectionLength = 0;
+            SendMessage(rtb.Handle, WM_VSCROLL, new IntPtr(SB_BOTTOM), IntPtr.Zero);
+        }
         else
         {
             rtb.SelectionStart = selStart; rtb.SelectionLength = selLen;
@@ -1834,7 +1850,7 @@ class MainForm : Form
         currentFile = resume ? resumeFile : newFile ?? Path.Combine(saveDir, MakeName(namePattern, DateTime.Now));
         lnkFile.Text = (resume ? "이어서 저장 중: " : "저장 파일: ") + currentFile;
         rtb.Clear();
-        logHistory.Length = 0; prevTail = "";
+        logHistory.Length = 0; prevTail = ""; heldBreaks = "";
         lineCount = 0; charCount = 0;
         if (resume) ShowPrevious(currentFile);
         btnResume.Visible = false;
@@ -1866,7 +1882,9 @@ class MainForm : Form
             rtb.SelectionStart = rtb.TextLength;
             rtb.SelectionColor = Theme.Faint;
             rtb.SelectionFont = fText;
-            rtb.AppendText(prevTail);
+            rtb.AppendText(prevTail.TrimEnd('\r', '\n'));
+            heldBreaks = "\r\n";   // 줄바꿈은 새 기록이 붙을 때 넣음
+            SendMessage(rtb.Handle, WM_VSCROLL, new IntPtr(SB_BOTTOM), IntPtr.Zero);
         }
         catch { }
     }
@@ -2025,6 +2043,41 @@ class MainForm : Form
         }
     }
 
+    // 시험용(--selftest scroll:출력): 화면 밖에서 실제 기록 형태의 글을 빠르게 붙이며
+    // 매번 "마지막 글자 줄이 칸 맨 아래 줄에 있는지"(아래 여백이 한 줄 높이 미만) 잼
+    public void ScrollTest(string outPath)
+    {
+        StartPosition = FormStartPosition.Manual;
+        Location = new Point(-4000, 100);
+        Size = new Size(S(700), S(460));
+        Shown += delegate
+        {
+            var log = new StringBuilder();
+            var rnd = new Random(1);
+            int bad = 0, n = 0;
+            string[] words = { "위원장님", "금융위원회", "그 부분은", "검토하겠습니다", "말씀하신", "레버리지 상품", "소비자 보호", "어떻게 생각하십니까" };
+            for (int i = 0; i < 60; i++)
+            {
+                var sb = new StringBuilder("[15:" + (10 + i / 60).ToString("00") + ":" + (i % 60).ToString("00") + "] ");
+                int len = rnd.Next(2, 30);
+                for (int k = 0; k < len; k++) sb.Append(words[rnd.Next(words.Length)]).Append(' ');
+                // 기록 파일과 같은 모양: 줄 끝 줄바꿈, 가끔 빈 줄(발언자 바뀜)
+                AppendLog(sb.ToString().TrimEnd() + (i % 5 == 4 ? "\r\n\r\n" : "\r\n"));
+                Application.DoEvents();
+                n++;
+                int last = rtb.TextLength - 1;
+                while (last > 0 && (rtb.Text[last] == '\n' || rtb.Text[last] == '\r')) last--;
+                int lineH = TextRenderer.MeasureText("가", fText).Height;
+                int room = rtb.ClientSize.Height - (rtb.GetPositionFromCharIndex(last).Y + lineH);
+                bool ok = room >= -2 && room < lineH;   // 마지막 글자 줄이 맨 아래 줄 (잘리지도, 그 아래 빈 줄도 없음)
+                if (!ok) { bad++; log.AppendLine("  " + i + ": 아래 여백 " + room + "px (줄 높이 " + lineH + ")"); }
+            }
+            log.Insert(0, "붙인 횟수 " + n + ", 마지막 줄이 맨 아래가 아니었던 횟수 " + bad + "\r\n");
+            File.WriteAllText(outPath, log.ToString(), new UTF8Encoding(true));
+            Close();
+        };
+    }
+
     // 화면 확인용: 가짜 자막으로 UI를 채움 (--demo)
     public void Demo()
     {
@@ -2073,6 +2126,14 @@ static class SelfTest
             Application.EnableVisualStyles();
             var f = new MainForm();
             f.Shown += delegate { f.Demo(); };
+            Application.Run(f);
+            return;
+        }
+        if (outPath.StartsWith("scroll:"))   // scroll:출력파일 - 자동 스크롤이 마지막 줄을 맨 아래에 두는지
+        {
+            Application.EnableVisualStyles();
+            var f = new MainForm();
+            f.ScrollTest(outPath.Substring(7));
             Application.Run(f);
             return;
         }

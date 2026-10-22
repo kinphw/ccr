@@ -2,7 +2,7 @@
 
 자막을 읽어 txt 파일에 누적 저장하는 Windows 프로그램.
 
-- 버전 0.0.9 · 개발자 kinphw with CLAUDE
+- 버전 0.0.10 · 개발자 kinphw with CLAUDE
 - 대상: Windows 10/11 (기본 내장 .NET Framework 4.x, 설치 불필요)
 
 ## 자막 출처 (자동 선택)
@@ -30,7 +30,7 @@
 `%LOCALAPPDATA%\CCR\current.json` 에 지금 기록 중인 파일을 남긴다.
 
 ```json
-{"app":"CCR 0.0.9","file":"...\\자막_20261022_140012.txt","recording":true,"source":"webcast","meeting":"정무위원회 국정감사(금융위원회 등)","updated":"2026-10-22T14:00:15"}
+{"app":"CCR 0.0.10","file":"...\\자막_20261022_140012.txt","recording":true,"source":"webcast","meeting":"정무위원회 국정감사(금융위원회 등)","updated":"2026-10-22T14:00:15"}
 ```
 
 - `source`: `webcast`(국회 AI 자막) / `chrome-live-caption` / `""`(찾는 중)
@@ -47,7 +47,7 @@ build.bat
 
 빌드 후 `dist\CCR_v{버전}.zip`(ccr.exe + README.md)을 만든다. 버전은 빌드된 exe의 버전(`ccr.cs`의 `AppInfo.Version`·Assembly 버전 속성)을 따르므로, 버전을 올리면 새 이름의 zip이 생기고 같은 버전으로 다시 빌드하면 그 zip을 덮어쓴다.
 
-시험: `ccr.exe --selftest 출력.txt` (누적 로직), `ccr.exe --selftest --demo` (화면), `ccr.exe --selftest web:초:출력.txt` (의사중계 창만 읽기), `ccr.exe --autostart`
+시험: `ccr.exe --selftest 출력.txt` (누적 로직), `ccr.exe --selftest --demo` (화면), `ccr.exe --selftest web:초:출력.txt` (의사중계 창만 읽기), `ccr.exe --selftest lock:출력.txt` (파일 잠김 재시도), `ccr.exe --selftest scroll:출력.txt` (자동 스크롤이 마지막 줄을 맨 아래에 두는지), `ccr.exe --autostart`
 
 ## 구조
 
